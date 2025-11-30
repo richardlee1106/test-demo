@@ -449,7 +449,7 @@ const centerOnFeature = (feature) => {
     const width = tagCloudContainer.value.clientWidth;
     const height = tagCloudContainer.value.clientHeight;
     // Increased scale to 4.0 and duration to 1000ms per user request
-    const scale = 4.0; 
+    const scale = 2.0; 
     const duration = 1000; 
     
     const t = d3.zoomIdentity
