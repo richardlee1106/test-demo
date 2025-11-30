@@ -1,0 +1,11 @@
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <!-- 地图图钉底座（定位符号） -->
+  <path d="M16 28C16 28 28 18 28 12C28 6.477 23.523 2 18 2C12.477 2 8 6.477 8 12C8 18 20 28 20 28L16 28Z"
+        fill="#4A90E2" opacity="0.9"/>
+  <!-- 文本标签气泡 -->
+  <rect x="4" y="8" width="16" height="12" rx="3" fill="white" stroke="#333" stroke-width="1"/>
+  <!-- 标签内文字示意（可选，实际使用中通常不渲染文字） -->
+  <text x="6" y="16" font-family="sans-serif" font-size="8" fill="#333">Tag</text>
+  <!-- 小三角连接符 -->
+  <polygon points="12,20 16,24 20,20" fill="white" stroke="#333" stroke-width="1"/>
+</svg>

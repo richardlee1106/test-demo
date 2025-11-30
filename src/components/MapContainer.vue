@@ -30,7 +30,7 @@ import Point from 'ol/geom/Point';
 import { fromLonLat, toLonLat } from 'ol/proj';
 import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style';
 
-const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'map-move-end', 'toggle-filter']);
+const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter']);
 const props = defineProps({
   poiFeatures: { type: Array, default: () => [] },
   hoveredFeatureId: { type: Object, default: null }, // We use the feature object itself as ID
@@ -54,6 +54,7 @@ const polygonLayer = new VectorLayer({
     stroke: new Stroke({ color: '#2ecc71', width: 2 }),
     fill: new Fill({ color: 'rgba(46,204,113,0.1)' }),
   }),
+  zIndex: 50 // Lower z-index
 });
 
 const highlightLayerSource = new VectorSource();
@@ -66,6 +67,7 @@ const highlightLayer = new VectorLayer({
       stroke: new Stroke({ color: 'red', width: 2 }),
     }),
   }),
+  zIndex: 100 // Higher z-index
 });
 
 // Special layer for single hover highlight
@@ -78,8 +80,9 @@ const hoverLayer = new VectorLayer({
       fill: new Fill({ color: 'rgba(255, 165, 0, 0.8)' }), // Orange
       stroke: new Stroke({ color: '#fff', width: 2 }),
     }),
-    zIndex: 999
+    zIndex: 999 // Highest z-index
   }),
+  zIndex: 200 // Also set layer z-index
 });
 
 // Cached OL features for POIs
@@ -107,6 +110,7 @@ onMounted(() => {
   // Event Listeners
   map.value.on('moveend', onMapMoveEnd);
   map.value.on('pointermove', onPointerMove);
+  map.value.on('singleclick', onMapClick);
 
   rebuildPoiOlFeatures();
 
@@ -123,6 +127,9 @@ watch(() => props.hoveredFeatureId, (newVal) => {
     const olFeature = rawToOlMap.get(newVal);
     // We clone it to display in the hover layer
     const clone = olFeature.clone();
+    // Explicitly copy the __raw property to ensure it persists in the clone
+    // This is critical for the reverse interaction (Map -> TagCloud) when hovering the cloned feature
+    clone.set('__raw', olFeature.get('__raw'));
     hoverLayerSource.addFeature(clone);
   }
 });
@@ -150,29 +157,84 @@ const emitHover = debounce((feature) => {
   emit('hover-feature', feature);
 }, 50); // 50ms debounce
 
+function onMapClick(evt) {
+  // if (evt.dragging) return; // Allow slight movement
+  
+  const pixel = map.value.getEventPixel(evt.originalEvent);
+  let foundRaw = null;
+  
+  // 1. Try standard hit detection
+  map.value.forEachFeatureAtPixel(pixel, (feature) => {
+    const raw = feature.get('__raw');
+    if (raw) {
+      foundRaw = raw;
+      return true;
+    }
+  }, { 
+    // Remove specific layer filter to be safe, just check for __raw
+    hitTolerance: 10 
+  });
+  
+  // 2. Fallback: Distance check
+  if (!foundRaw) {
+     const view = map.value.getView();
+     const resolution = view.getResolution();
+     const clickCoord = evt.coordinate;
+     const threshold = resolution * 15; // 15 pixels tolerance in map units
+     
+     let closestDist = Infinity;
+     let closestFeature = null;
+     
+     // Check visible features in highlight layer
+     highlightLayerSource.forEachFeature((feat) => {
+        const geom = feat.getGeometry();
+        // Only points
+        if (geom instanceof Point) {
+           const coord = geom.getCoordinates();
+           const dx = coord[0] - clickCoord[0];
+           const dy = coord[1] - clickCoord[1];
+           const dist = Math.sqrt(dx*dx + dy*dy);
+           if (dist < threshold && dist < closestDist) {
+              closestDist = dist;
+              closestFeature = feat;
+           }
+        }
+     });
+     
+     if (closestFeature) {
+        foundRaw = closestFeature.get('__raw');
+        console.log('[MapContainer] Fallback found feature by distance:', closestDist);
+     }
+  }
+  
+  if (foundRaw) {
+    console.log('[MapContainer] Clicked feature:', foundRaw);
+    emit('click-feature', foundRaw);
+  } else {
+    console.log('[MapContainer] Clicked map but no feature found');
+  }
+}
+
 function onPointerMove(evt) {
   if (evt.dragging) return;
   
   const pixel = map.value.getEventPixel(evt.originalEvent);
-  const hit = map.value.forEachFeatureAtPixel(pixel, (feature) => {
-    return feature;
-  }, { layerFilter: (layer) => layer === highlightLayer || layer === hoverLayer }); 
-  // Only detect hover on highlighted features (the ones selected)? 
-  // Or all features? User said "Map red point". Red points are in highlightLayer.
-  // But wait, `highlightLayer` contains the selected points.
-  // If we want to hover ALL points, we need to render all points.
-  // Currently `olPoiFeatures` are NOT added to the map unless selected (highlightLayer).
-  // The user says "Left map corresponding red point". Red points are the selected ones.
   
-  // If we are hovering over a red point (highlightLayer)
+  // Simplified hover detection
+  let hitRaw = null;
+  map.value.forEachFeatureAtPixel(pixel, (feature) => {
+     if (feature.get('__raw')) {
+        hitRaw = feature.get('__raw');
+        return true;
+     }
+  }, {
+     hitTolerance: 8
+  });
   
-  if (hit) {
-    const raw = hit.get('__raw');
-    if (raw) {
-      map.value.getTargetElement().style.cursor = 'pointer';
-      emitHover(raw);
-      return;
-    }
+  if (hitRaw) {
+    map.value.getTargetElement().style.cursor = 'pointer';
+    emitHover(hitRaw);
+    return;
   }
   
   map.value.getTargetElement().style.cursor = '';

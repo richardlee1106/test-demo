@@ -141,11 +141,14 @@ function updateHighlight(hoveredFeature) {
   rootGroupRef.selectAll('text')
     .transition().duration(200)
     .style('fill', d => {
+      if (!props.data || !props.data[d.originalIndex]) return d.selected ? '#d23' : '#bfeaf1';
       const feature = props.data[d.originalIndex];
+      // Use reference equality check as feature objects are shared
       const isHovered = feature === hoveredFeature;
       return isHovered ? 'orange' : (d.selected ? '#d23' : '#bfeaf1');
     })
     .style('font-weight', d => {
+      if (!props.data || !props.data[d.originalIndex]) return d.selected ? '700' : '400';
       const feature = props.data[d.originalIndex];
       const isHovered = feature === hoveredFeature;
       return isHovered ? 'bold' : (d.selected ? '700' : '400');
@@ -384,6 +387,52 @@ const resetZoom = () => {
     );
   }
 };
+
+const centerOnFeature = (feature) => {
+  if (!feature || !rootGroupRef || rootGroupRef.empty() || !svgRef) {
+    console.warn('[TagCloud] centerOnFeature: missing feature or D3 references');
+    return;
+  }
+
+  console.log('[TagCloud] centerOnFeature called for:', feature.properties?.name || feature.id);
+
+  // Find the corresponding tag data
+  let targetD = null;
+  
+  // Robust matching strategy
+  rootGroupRef.selectAll('text').each(function(d) {
+    const feat = props.data[d.originalIndex];
+    if (feat === feature) {
+      targetD = d;
+    } else if (feat && feature && feat.properties && feature.properties && 
+               feat.properties.name === feature.properties.name &&
+               feat.geometry.coordinates[0] === feature.geometry.coordinates[0] &&
+               feat.geometry.coordinates[1] === feature.geometry.coordinates[1]) {
+      // Fallback: content matching if reference differs
+       targetD = d;
+    }
+  });
+  
+  if (targetD) {
+    console.log('[TagCloud] Found target tag:', targetD.name);
+    const width = tagCloudContainer.value.clientWidth;
+    const height = tagCloudContainer.value.clientHeight;
+    const scale = 2.5; 
+    
+    const t = d3.zoomIdentity
+      .translate(width / 2, height / 2)
+      .scale(scale)
+      .translate(-targetD.x, -targetD.y);
+      
+    svgRef.transition().duration(750).call(
+      d3.zoom().transform, t
+    );
+  } else {
+    console.warn('[TagCloud] Could not find tag for feature in cloud');
+  }
+};
+
+defineExpose({ centerOnFeature });
 
 </script>
 <style scoped>

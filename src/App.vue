@@ -16,11 +16,13 @@
                       @polygon-completed="handlePolygonCompleted" 
                       @map-ready="handleMapReady"
                       @hover-feature="handleFeatureHover"
+                      @click-feature="handleFeatureClick"
                       @map-move-end="handleMapMoveEnd"
                       @toggle-filter="handleToggleFilter" />
       </section>
       <section class="right-panel">
-        <TagCloud :data="filteredTagData" 
+        <TagCloud ref="tagCloudRef"
+                  :data="filteredTagData" 
                   :map="map" 
                   :algorithm="selectedAlgorithm" 
                   :selectedBounds="selectedBounds" 
@@ -43,6 +45,7 @@ import TagCloud from './components/TagCloud.vue';
 import MapContainer from './components/MapContainer.vue';
 
 const controlPanelRef = ref(null);
+const tagCloudRef = ref(null);
 const mapComponent = ref(null);
 const map = ref(null);
 const tagData = ref([]);
@@ -145,6 +148,16 @@ const handleFeatureHover = (id) => {
   hoveredFeatureId.value = id;
 };
 
+const handleFeatureClick = (feature) => {
+  // 1. Update highlight
+  hoveredFeatureId.value = feature;
+  
+  // 2. Center tag cloud on feature
+  if (tagCloudRef.value) {
+    tagCloudRef.value.centerOnFeature(feature);
+  }
+};
+
 const handleFeatureLocate = (feature) => {
   if (mapComponent.value) {
     mapComponent.value.flyTo(feature);
@@ -230,7 +243,7 @@ html, body, #app {
 
 .top-controls {
   flex: 0 0 56px; /* Fixed height */
-  background: #0a0a0a;
+  background: #333; /* Dark gray as requested */
   padding: 8px;
   box-sizing: border-box;
   color: #fff;
