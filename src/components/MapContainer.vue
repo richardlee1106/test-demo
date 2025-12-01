@@ -2,16 +2,27 @@
   <div class="map-wrapper">
     <div ref="mapContainer" class="map-container"></div>
     
-    <!-- Real-time Filter Control -->
+    <!-- Real-time Filter & Heatmap Control -->
     <div class="map-filter-control">
-      <span class="filter-label">实时过滤</span>
-      <el-switch 
-        v-model="filterEnabled" 
-        @change="toggleFilter"
-        inline-prompt
-        active-text="开启"
-        inactive-text="关闭"
-      />
+      <div class="control-row">
+        <span class="filter-label">实时过滤</span>
+        <el-switch 
+          v-model="filterEnabled" 
+          @change="toggleFilter"
+          inline-prompt
+          active-text="开启"
+          inactive-text="关闭"
+        />
+      </div>
+      <div class="control-row">
+        <span class="filter-label">热力图</span>
+        <el-switch 
+          v-model="heatmapEnabled" 
+          inline-prompt
+          active-text="开启"
+          inactive-text="关闭"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -21,6 +32,7 @@ import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import OlMap from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
+import HeatmapLayer from 'ol/layer/Heatmap';
 import XYZ from 'ol/source/XYZ';
 import VectorSource from 'ol/source/Vector';
 import { Vector as VectorLayer } from 'ol/layer';
@@ -41,6 +53,7 @@ const map = ref(null);
 let drawInteraction = null;
 let hoveredFeature = null; // Internal track of currently hovered feature on map
 const filterEnabled = ref(false);
+const heatmapEnabled = ref(false);
 
 const toggleFilter = (val) => {
   emit('toggle-filter', val);
@@ -70,6 +83,16 @@ const highlightLayer = new VectorLayer({
   zIndex: 100 // Higher z-index
 });
 
+// Heatmap Layer
+const heatmapSource = new VectorSource();
+const heatmapLayer = new HeatmapLayer({
+  source: heatmapSource,
+  blur: 15,
+  radius: 8,
+  zIndex: 90, // Below highlight, above polygon
+  visible: false,
+});
+
 // Special layer for single hover highlight
 const hoverLayerSource = new VectorSource();
 const hoverLayer = new VectorLayer({
@@ -89,6 +112,29 @@ const hoverLayer = new VectorLayer({
 let olPoiFeatures = [];
 let rawToOlMap = new Map();
 
+// Heatmap Dynamic Style
+function updateHeatmapStyle() {
+  if (!map.value) return;
+  const zoom = map.value.getView().getZoom();
+  
+  // Dynamic adjustment based on zoom
+  // Zoom high (close): radius small, discrete
+  // Zoom low (far): radius large, aggregated
+  
+  const minZ = 10;
+  const maxZ = 18;
+  const clampedZoom = Math.max(minZ, Math.min(maxZ, zoom));
+  const ratio = (clampedZoom - minZ) / (maxZ - minZ); // 0 (far) -> 1 (close)
+  
+  // Radius: Far -> 30, Close -> 5
+  const radius = 30 - ratio * (30 - 5);
+  // Blur: Far -> 25, Close -> 5
+  const blur = 25 - ratio * (25 - 5);
+  
+  heatmapLayer.setRadius(radius);
+  heatmapLayer.setBlur(blur);
+}
+
 onMounted(() => {
   // Base layer: Gaode (Amap) XYZ tiles with key; fallback to OSM if blocked
   const amapKey = import.meta.env.VITE_AMAP_KEY || '2b42a2f72ef6751f2cd7c7bd24139e72';
@@ -100,7 +146,7 @@ onMounted(() => {
 
   map.value = new OlMap({
     target: mapContainer.value,
-    layers: [baseLayer, polygonLayer, highlightLayer, hoverLayer],
+    layers: [baseLayer, polygonLayer, heatmapLayer, highlightLayer, hoverLayer],
     view: new View({
       center: fromLonLat([114.307, 30.549]),
       zoom: 13,
@@ -111,6 +157,9 @@ onMounted(() => {
   map.value.on('moveend', onMapMoveEnd);
   map.value.on('pointermove', onPointerMove);
   map.value.on('singleclick', onMapClick);
+  
+  // Listen to zoom changes for heatmap
+  map.value.getView().on('change:resolution', updateHeatmapStyle);
 
   rebuildPoiOlFeatures();
 
@@ -357,6 +406,17 @@ function showHighlights(features, options = {}) {
   highlightLayerSource.addFeatures(feats);
 }
 
+
+// Watchers
+watch(heatmapEnabled, (val) => {
+  if (heatmapLayer) {
+    heatmapLayer.setVisible(val);
+    if (val) {
+      updateHeatmapStyle();
+    }
+  }
+});
+
 function onPolygonComplete(polygonGeom) {
   const ringCoords = polygonGeom.getCoordinates()[0];
   const ringPixels = ringCoords.map((c) => map.value.getPixelFromCoordinate(c));
@@ -368,6 +428,17 @@ function onPolygonComplete(polygonGeom) {
     if (pointInPolygonPixel(px, ringPixels)) {
       insideRaw.push(feat.get('__raw'));
     }
+  }
+  
+  // Update Heatmap Source
+  heatmapSource.clear();
+  if (insideRaw.length > 0) {
+     const feats = insideRaw.map(raw => {
+        if (rawToOlMap.has(raw)) return rawToOlMap.get(raw);
+        const [lon, lat] = raw.geometry.coordinates;
+        return new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+     });
+     heatmapSource.addFeatures(feats);
   }
 
   // Calculate polygon center point
@@ -411,7 +482,8 @@ function pointInPolygonPixel(pt, ringPixels) {
 // 清空多边形和高亮
 function clearPolygon() {
   polygonLayerSource.clear();
-  clearHighlights();
+  highlightLayerSource.clear();
+  heatmapSource.clear();
 }
 
 defineExpose({ map, openPolygonDraw, closePolygonDraw, showHighlights, clearHighlights, clearPolygon, flyTo });
@@ -471,12 +543,22 @@ function transformLon(x, y) {
   right: 10px;
   z-index: 1000;
   background-color: rgba(255, 255, 255, 0.9);
-  padding: 6px 12px;
+  padding: 10px 12px;
   border-radius: 4px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.3);
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 140px;
+}
+
+.control-row {
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
 }
 
 .filter-label {
