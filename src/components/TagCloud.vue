@@ -1,6 +1,7 @@
 <template>
   <div class="tag-cloud-wrapper">
     <div ref="tagCloudContainer" class="tag-cloud-container"></div>
+    <!-- 缩放控制按钮组 -->
     <div class="zoom-controls">
       <button @click="zoomIn" class="zoom-btn" title="放大">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -32,121 +33,158 @@ import { ref, onMounted, watch } from 'vue';
 import * as d3 from 'd3';
 import BasicWorker from '../workers/basic.worker.js?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
+import GeoWorker from '../workers/geo.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
-
 import { ElMessage } from 'element-plus';
 
+// 定义组件事件
+// hover-feature: 鼠标悬停在标签上时触发，通知地图高亮对应 POI
+// locate-feature: 点击标签时触发，通知地图飞向对应 POI
 const emit = defineEmits(['hover-feature', 'locate-feature']);
+
+// 定义组件属性
 const props = defineProps({
-  data: Array,
-  map: Object,
-  algorithm: String,
-  selectedBounds: Object,
-  polygonCenter: Object,
-  spiralConfig: Object,
-  boundaryPolygon: Array,
-  hoveredFeatureId: Object, // Pass the feature object
+  data: Array, // 标签数据（GeoJSON Feature 数组）
+  map: Object, // OpenLayers 地图实例
+  algorithm: String, // 布局算法类型 ('basic' | 'spiral' | 'geo')
+  selectedBounds: Object, // 选区边界（目前未使用）
+  polygonCenter: Object, // 多边形中心点（用于螺旋布局）
+  spiralConfig: Object, // 螺旋布局配置
+  boundaryPolygon: Array, // 边界多边形顶点
+  hoveredFeatureId: Object, // 当前被高亮的 Feature 对象（来自地图交互）
+  drawMode: String, // 当前绘制模式 ('Circle' | 'Polygon' | 'None')
+  circleCenter: Array, // 圆形绘制模式下的圆心坐标 [lon, lat]
 });
 
+// 响应式引用
 const tagCloudContainer = ref(null);
-let worker = null;
-let svgRef = null;
-let rootGroupRef = null;
-let zoomGroupRef = null;
-let zoomBehavior = null; // Store zoom behavior instance
-let debounceTimer = null;
-const MAX_TAGS = 1000; // 增加标签显示上限
-const RESIZE_DEBOUNCE_MS = 120;
+let worker = null; // Web Worker 实例
+let svgRef = null; // D3 SVG 选择器引用
+let rootGroupRef = null; // 主分组引用 (g.main-group)
+let zoomGroupRef = null; // 缩放分组引用 (g.zoom-group)
+let zoomBehavior = null; // D3 Zoom 行为实例
+let debounceTimer = null; // 防抖定时器
 
-// Zoom and pan state
-let currentTransform = d3.zoomIdentity;
-const MIN_SCALE = 0.2;
-const MAX_SCALE = 5;
+// 常量配置
+const MAX_TAGS = 1000; // 标签显示上限，防止 DOM 过多导致卡顿
+const RESIZE_DEBOUNCE_MS = 120; // 窗口大小调整防抖时间
+const MIN_SCALE = 0.2; // 最小缩放比例
+const MAX_SCALE = 5; // 最大缩放比例
+let currentTransform = d3.zoomIdentity; // 当前缩放变换状态
 
-// 初始化worker
-function initWorker(algorithm) {
-  // 清理旧worker
+/**
+ * 初始化 Web Worker
+ * 根据当前的绘制模式 (drawMode) 和算法选择 (algorithm) 实例化对应的 Worker。
+ * Worker 用于在后台线程执行耗时的力导向布局计算，避免阻塞 UI 线程。
+ */
+function initWorker() {
+  // 清理旧 worker，防止内存泄漏和重复处理
   if (worker) {
     worker.terminate();
   }
   
-  // 根据算法类型创建对应的worker
-  if (algorithm === 'basic') {
+  // 确定 worker 类型
+  // 优先级: Geo (圆形模式) > 选定的算法 (basic/spiral)
+  if (props.drawMode === 'Circle') {
+    worker = new GeoWorker();
+  } else if (props.algorithm === 'basic') {
     worker = new BasicWorker();
   } else {
     worker = new SpiralWorker();
   }
   
-  // 设置worker消息处理
+  // 设置 worker 消息处理回调
+  // 当 Worker 计算完成并返回布局后的标签数据时触发
   worker.onmessage = event => {
     const tags = event.data;
-    console.log('TagCloud received tags from Worker:', tags);
+    console.log('[TagCloud] 收到来自 Worker 的标签数据:', tags);
 
     const svg = d3.select(tagCloudContainer.value).select('svg');
     const root = svg.select('g.main-group');
-    rootGroupRef = root; // Update reference
+    rootGroupRef = root; // 更新引用，用于后续的高亮操作
     const zoomGroup = svg.select('g.zoom-group');
 
     if (svg.empty() || root.empty() || zoomGroup.empty()) {
-      console.error('SVG, main group, or zoom group not found during worker.onmessage.');
+      console.error('[TagCloud] 错误: 在 worker.onmessage 期间未找到 SVG、主组或缩放组。');
       return;
     }
 
+    // 使用 D3 的数据绑定机制 (Join pattern) 更新 DOM
+    // key 函数使用 name-originalIndex 确保唯一性，避免复用错误的 DOM 元素
     const texts = root
       .selectAll('text')
       .data(tags, (d) => (d.name ? `${d.name}-${d.originalIndex}` : `${d.originalIndex}`));
 
+    // 处理进入、更新和退出选择集
     texts.join(
+      // Enter: 处理新添加的节点
       enter => enter.append('text')
-        .attr('text-anchor', 'middle')
+        .attr('text-anchor', 'middle') // 文本居中对齐
         .text(d => d.name)
-        .attr('dy', '.35em')
+        .attr('dy', '.35em') // 垂直居中微调
+        // 根据密度计算字体大小，如果 worker 未返回 fontSize 则使用默认插值
         .style('font-size', d => `${(d.fontSize || (8 + (1 - d.normalizedDensity) * (24 - 8)))}px`)
-        .style('fill', d => d.selected ? '#d23' : '#bfeaf1')
-        .style('font-weight', d => d.selected ? '700' : '400')
-        .style('cursor', 'pointer') // Add pointer cursor
-        .attr('transform', d => `translate(${d.x}, ${d.y}) rotate(${d.rotation || 0})`)
-        .on('mouseover', (event, d) => {
-           const feature = props.data[d.originalIndex];
-           emit('hover-feature', feature);
+        .style('fill', d => {
+           if (d.isCenter) return '#FFA500'; // 中心标签显示为橙色
+           return d.selected ? '#d23' : '#bfeaf1'; // 选中为红色，普通为淡蓝色
         })
-        .on('mouseout', () => {
-           emit('hover-feature', null);
+        .style('font-weight', d => d.isCenter ? '900' : (d.selected ? '700' : '400'))
+        .style('cursor', 'pointer') // 添加手型光标
+        // 初始位置和旋转
+        .attr('transform', d => `translate(${d.x}, ${d.y}) rotate(${d.rotation || 0})`)
+        // 交互事件监听
+        .on('mouseover', (event, d) => {
+           if (d.isCenter) return; // 忽略中心标签
+           const feature = props.data[d.originalIndex];
+           emit('hover-feature', feature); // 触发悬停事件，通知父组件
+        })
+        .on('mouseout', (event, d) => {
+           if (d.isCenter) return;
+           emit('hover-feature', null); // 鼠标移出，清除悬停状态
         })
         .on('click', (event, d) => {
            event.stopPropagation();
+           if (d.isCenter) return;
            const feature = props.data[d.originalIndex];
-           emit('locate-feature', feature);
+           emit('locate-feature', feature); // 触发定位事件
         }),
+      // Update: 处理现有节点的更新（如位置变化）
       update => update
-        .transition().duration(250)
+        .transition().duration(250) // 添加平滑过渡动画
         .style('font-size', d => `${(d.fontSize || (8 + (1 - d.normalizedDensity) * (24 - 8)))}px`)
-        .style('fill', d => d.selected ? '#d23' : '#bfeaf1')
-        .style('font-weight', d => d.selected ? '700' : '400')
+        .style('fill', d => {
+           if (d.isCenter) return '#FFA500';
+           return d.selected ? '#d23' : '#bfeaf1';
+        })
+        .style('font-weight', d => d.isCenter ? '900' : (d.selected ? '700' : '400'))
         .attr('transform', d => `translate(${d.x}, ${d.y}) rotate(${d.rotation || 0})`)
-        // Re-attach listeners if needed, but D3 preserves them on update usually. 
-        // However, data might change, so it's safer to ensure they are correct.
-        // Actually join update selection keeps listeners.
         ,
+      // Exit: 处理删除的节点
       exit => exit.remove()
     );
     
-    // Apply current hover highlight if any
+    // 应用当前的高亮状态（如果存在）
     if (props.hoveredFeatureId) {
       updateHighlight(props.hoveredFeatureId);
     }
   };
 }
 
+/**
+ * 更新标签的高亮样式
+ * 当地图上的 POI 被悬停时，对应的高亮右侧标签云中的文字
+ * @param {Object} hoveredFeature - 当前悬停的地理要素对象
+ */
 function updateHighlight(hoveredFeature) {
   if (!rootGroupRef || rootGroupRef.empty()) return;
   
   rootGroupRef.selectAll('text')
     .transition().duration(200)
     .style('fill', d => {
+      if (d.isCenter) return '#FFA500';
       if (!props.data || !props.data[d.originalIndex]) return d.selected ? '#d23' : '#bfeaf1';
       const feature = props.data[d.originalIndex];
-      // Robust matching
+      // 鲁棒的匹配策略：先比较引用，再比较名称和坐标
       let isHovered = feature === hoveredFeature;
       if (!isHovered && feature && hoveredFeature) {
          const getName = (f) => f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
@@ -156,6 +194,7 @@ function updateHighlight(hoveredFeature) {
             const c1 = feature.geometry?.coordinates;
             const c2 = hoveredFeature.geometry?.coordinates;
             if (c1 && c2) {
+               // 坐标浮点数比较，使用极小值 epsilon
                const dx = Math.abs(c1[0] - c2[0]);
                const dy = Math.abs(c1[1] - c2[1]);
                if (dx < 0.000001 && dy < 0.000001) isHovered = true;
@@ -165,6 +204,7 @@ function updateHighlight(hoveredFeature) {
       return isHovered ? 'orange' : (d.selected ? '#d23' : '#bfeaf1');
     })
     .style('font-weight', d => {
+      if (d.isCenter) return '900';
       if (!props.data || !props.data[d.originalIndex]) return d.selected ? '700' : '400';
       const feature = props.data[d.originalIndex];
       const isHovered = feature === hoveredFeature;
@@ -172,31 +212,34 @@ function updateHighlight(hoveredFeature) {
     });
 }
 
+// 监听 props.hoveredFeatureId 变化，实时更新高亮
 watch(() => props.hoveredFeatureId, (newVal) => {
   updateHighlight(newVal);
 });
 
+/**
+ * 主布局函数：准备数据并发送给 Worker
+ * @param {String} algorithm - 当前使用的算法名称
+ */
 const runLayout = (algorithm) => {
-  console.log('runLayout called. Props.data:', props.data, 'Props.map:', props.map); // 检查传入的data和map
+  console.log('[TagCloud] runLayout 被调用. 数据量:', props.data?.length); 
   if (!props.data) {
-    console.log('runLayout early return. Data exists:', !!props.data);
+    console.log('[TagCloud] runLayout 提前返回. Data 为空');
     return;
   }
-
-  console.log('TagCloud received data:', props.data); // 打印接收到的数据
 
   const width = tagCloudContainer.value.clientWidth;
   const height = tagCloudContainer.value.clientHeight;
 
-  // Always re-select to ensure refs are not stale
+  // 始终重新选择 SVG 以确保引用不是过期的
   let svg = d3.select(tagCloudContainer.value).select('svg');
   if (svg.empty()) {
     svg = d3.select(tagCloudContainer.value).append('svg');
-    // Create nested group structure for zoom/pan
+    // 创建嵌套的组结构用于缩放和平移 (zoom/pan)
     svg.append('g').attr('class', 'zoom-group');
   }
 
-  // Get zoom group and set up main group within it
+  // 获取 zoom group 并在其中设置 main group
   const zoomGroup = svg.select('g.zoom-group');
   let root = zoomGroup.select('g.main-group');
   if (root.empty()) {
@@ -205,15 +248,15 @@ const runLayout = (algorithm) => {
 
   svg.attr('width', width)
      .attr('height', height)
-     .style('background-color', 'rgba(255, 255, 255, 0.1)'); // Debug background
+     .style('background-color', 'rgba(255, 255, 255, 0.1)'); // 调试用背景色
 
-  // Set up zoom behavior if not already set up
+  // 设置缩放行为 (Zoom Behavior) 如果尚未设置
     if (!svgRef || !zoomGroupRef) {
       zoomBehavior = d3.zoom()
-        .scaleExtent([MIN_SCALE, MAX_SCALE])
+        .scaleExtent([MIN_SCALE, MAX_SCALE]) // 设置缩放范围
         .on('zoom', (event) => {
           currentTransform = event.transform;
-          zoomGroup.attr('transform', currentTransform);
+          zoomGroup.attr('transform', currentTransform); // 应用变换
         });
 
       svg.call(zoomBehavior);
@@ -221,38 +264,46 @@ const runLayout = (algorithm) => {
       zoomGroupRef = zoomGroup;
     }
 
-  // Compute tag positions and selection flag
+  // 计算标签位置和选择标记
+  // 提取需要的数据属性，构建轻量级对象发送给 Worker
   let tags = (props.data || []).map((feature, index) => {
     const name = feature?.properties?.['名称'] ?? feature?.properties?.name ?? feature?.properties?.Name ?? '';
-    const weight = feature?.properties?.weight; // Extract weight if available
+    const weight = feature?.properties?.weight; // 如果有权重则提取
+    
+    // 提取地理坐标用于 Geo 布局
+    let lon, lat;
+    if (feature.geometry && feature.geometry.coordinates) {
+      // 假设坐标是 [lon, lat] (GeoJSON 标准)
+      [lon, lat] = feature.geometry.coordinates;
+    }
+
     return {
       name,
-      weight, // Pass weight to worker
-      x: width / 2,
+      weight, // 传递权重给 worker
+      lon, lat, // 传递坐标
+      x: width / 2, // 初始位置
       y: height / 2,
-      originalIndex: index, // Keep track of index in props.data
+      originalIndex: index, // 保持原始索引以便反查
     };
   }).filter(t => t.name && t.name.trim() !== '');
 
-  console.log('[TagCloud] After name extraction:', tags.length, 'tags');
+  console.log('[TagCloud] 名称提取后数量:', tags.length);
 
-  // Thin out very large datasets to keep DOM size manageable
+  // 削减非常大的数据集以保持 DOM 大小可控
   if (tags.length > MAX_TAGS) {
-    // 按密度排序后选取前MAX_TAGS个，而不是简单抽样
+    // 按密度排序后选取前 MAX_TAGS 个，保留最重要的节点
     const tempTags = calculateDensityGrid(tags, 64, width, height);
     tempTags.sort((a, b) => b.normalizedDensity - a.normalizedDensity);
     tags = tempTags.slice(0, MAX_TAGS);
-    console.log('[TagCloud] Thinned to MAX_TAGS:', tags.length);
+    console.log('[TagCloud] 已削减至上限:', tags.length);
   }
 
-  // Fast approximate density using grid to avoid O(n^2)
+  // 使用网格快速计算近似密度，用于字体大小插值
   if (tags.length <= MAX_TAGS) {
     tags = calculateDensityGrid(tags, 64, width, height);
   }
 
-  console.log('[TagCloud] After density calculation:', tags.length, 'tags');
-
-  // Highlight tags inside selected bounds (if any)
+  // 高亮显示在选中边界内的标签（如果有）
   const rect = getSelectedRect(props.selectedBounds);
   if (rect) {
     tags = tags.map(t => ({
@@ -263,12 +314,14 @@ const runLayout = (algorithm) => {
     tags = tags.map(t => ({ ...t, selected: false }));
   }
 
-  console.log('[TagCloud] Sending to worker:', tags.length, 'tags');
+  console.log('[TagCloud] 发送给 Worker 的数据量:', tags.length);
   
-  // Pass polygon center to worker for spiral algorithm (ensure it's serializable)
+  // 传递多边形中心给 worker 用于螺旋算法（确保可序列化）
   const serializablePolygonCenter = (props.polygonCenter && typeof props.polygonCenter.x === 'number' && typeof props.polygonCenter.y === 'number')
     ? { x: props.polygonCenter.x, y: props.polygonCenter.y }
     : { x: width / 2, y: height / 2 };
+  
+  // 转换配置对象为普通对象
   const plainConfig = props.spiralConfig ? {
     initialDistance: Number(props.spiralConfig.initialDistance ?? 5),
     spiralSpacing: Number(props.spiralConfig.spiralSpacing ?? 8),
@@ -277,6 +330,7 @@ const runLayout = (algorithm) => {
     fontMin: 8,
     fontMax: 24
   } : null;
+  
   let boundaryPixels = null;
   if (Array.isArray(props.boundaryPolygon) && props.boundaryPolygon.length && props.map) {
     try {
@@ -290,21 +344,28 @@ const runLayout = (algorithm) => {
     }
   }
   
+  // 净化数据以移除 Vue Proxies，防止 postMessage 克隆错误
+  const sanitizedTags = JSON.parse(JSON.stringify(tags));
+  const sanitizedCenter = props.circleCenter ? JSON.parse(JSON.stringify(props.circleCenter)) : null;
+
   worker.postMessage({ 
-    tags, 
+    tags: sanitizedTags, 
     algorithm, 
     width, 
     height,
     polygonCenter: serializablePolygonCenter,
     config: plainConfig,
-    boundary: boundaryPixels
+    boundary: boundaryPixels,
+    // Geo Worker 参数
+    center: sanitizedCenter,
   });
 };
 
 onMounted(() => {
-  initWorker(props.algorithm || 'basic');
+  initWorker();
   runLayout(props.algorithm);
 
+  // 监听窗口大小调整，防抖动重新布局
   window.addEventListener('resize', () => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => runLayout(props.algorithm), RESIZE_DEBOUNCE_MS);
@@ -316,50 +377,50 @@ function scheduleRunLayout() {
   debounceTimer = setTimeout(() => runLayout(props.algorithm), 80);
 }
 
+// 监听属性变化以触发更新
 watch([
   () => props.algorithm,
   () => props.data,
   () => props.selectedBounds,
   () => props.polygonCenter,
   () => props.boundaryPolygon,
-], ([newAlgorithm, ...rest], [oldAlgorithm]) => {
-  // 如果算法改变,重新初始化worker
-  if (newAlgorithm !== oldAlgorithm) {
-    initWorker(newAlgorithm || 'basic');
+  () => props.drawMode,
+  () => props.circleCenter
+], ([newAlgorithm, newData, newBounds, newCenter, newPoly, newMode, newCircleCenter], [oldAlgorithm, oldData, oldBounds, oldCenter, oldPoly, oldMode, oldCircleCenter]) => {
+  // 检查是否需要重新初始化 worker (算法改变 或 模式改变)
+  const modeChanged = newMode !== oldMode;
+  const algChanged = newAlgorithm !== oldAlgorithm;
+  
+  if (modeChanged || algChanged) {
+    initWorker();
   }
   scheduleRunLayout();
 });
 
-// Utilities
+// 工具函数：获取选择区域矩形（暂时禁用）
 function getSelectedRect(bounds) {
-  return null; // Temporarily disable selection logic
-  if (!bounds || !props.map) return null;
-  try {
-    const sw = bounds.getSouthWest ? bounds.getSouthWest() : (bounds.sw || bounds.SW || bounds.bottomLeft || bounds.min);
-    const ne = bounds.getNorthEast ? bounds.getNorthEast() : (bounds.ne || bounds.NE || bounds.topRight || bounds.max);
-    if (!sw || !ne) return null;
-    const p1Arr = props.map.getPixelFromCoordinate(fromLonLat([sw.lng ?? sw[0], sw.lat ?? sw[1]]));
-    const p2Arr = props.map.getPixelFromCoordinate(fromLonLat([ne.lng ?? ne[0], ne.lat ?? ne[1]]));
-    const xMin = Math.min(p1Arr[0], p2Arr[0]);
-    const xMax = Math.max(p1Arr[0], p2Arr[0]);
-    const yMin = Math.min(p1Arr[1], p2Arr[1]);
-    const yMax = Math.max(p1Arr[1], p2Arr[1]);
-    return { xMin, xMax, yMin, yMax };
-  } catch (e) {
-    return null;
-  }
+  return null; 
 }
 
+/**
+ * 计算网格密度
+ * 将画布划分为网格，统计每个单元格内的点数，用于近似计算局部密度
+ * 用于动态调整标签字体大小（密度高的区域字体小，密度低的区域字体大）
+ */
 function calculateDensityGrid(items, cellSize, width, height) {
   if (!items || items.length === 0) return [];
   const cols = Math.max(1, Math.ceil(width / cellSize));
   const rows = Math.max(1, Math.ceil(height / cellSize));
   const grid = Array.from({ length: rows }, () => Array(cols).fill(0));
+  
+  // 填充网格计数
   for (const t of items) {
     const ci = Math.min(cols - 1, Math.max(0, Math.floor(t.x / cellSize)));
     const ri = Math.min(rows - 1, Math.max(0, Math.floor(t.y / cellSize)));
     grid[ri][ci] += 1;
   }
+  
+  // 计算每个点的平滑密度（包含周围3x3网格）
   const densities = items.map(t => {
     const ci = Math.min(cols - 1, Math.max(0, Math.floor(t.x / cellSize)));
     const ri = Math.min(rows - 1, Math.max(0, Math.floor(t.y / cellSize)));
@@ -376,10 +437,11 @@ function calculateDensityGrid(items, cellSize, width, height) {
     return sum / Math.max(1, count);
   });
   const max = Math.max(1, ...densities);
+  // 归一化密度，用于调整字体大小
   return items.map((t, i) => ({ ...t, normalizedDensity: densities[i] / max }));
 }
 
-// Zoom control methods
+// 缩放控制方法
 const zoomIn = () => {
   if (svgRef) {
     svgRef.transition().duration(300).call(
@@ -405,36 +467,41 @@ const resetZoom = () => {
   }
 };
 
+/**
+ * 定位到指定要素 (Center On Feature)
+ * 当用户在地图上点击某个 POI 时，标签云视图会自动缩放并定位到对应的标签
+ * @param {Object} feature - 目标地理要素
+ */
 const centerOnFeature = (feature) => {
   if (!feature || !rootGroupRef || rootGroupRef.empty() || !svgRef) {
-    console.warn('[TagCloud] centerOnFeature: missing feature or D3 references');
+    console.warn('[TagCloud] centerOnFeature: 缺少 feature 或 D3 引用');
     return;
   }
 
-  console.log('[TagCloud] centerOnFeature called for:', feature.properties?.name || feature.id);
+  console.log('[TagCloud] centerOnFeature 被调用，目标:', feature.properties?.name || feature.id);
 
-  // Find the corresponding tag data
+  // 查找对应的标签数据
   let targetD = null;
   
-  // Robust matching strategy
+  // 遍历所有文本节点寻找匹配项
   rootGroupRef.selectAll('text').each(function(d) {
     const feat = props.data[d.originalIndex];
     if (feat === feature) {
       targetD = d;
     } else if (feat && feature) {
-      // Helper to get name
+      // 辅助函数获取名称
       const getName = (f) => f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
       const name1 = getName(feat);
       const name2 = getName(feature);
       
       if (name1 && name2 && name1 === name2) {
-         // Secondary check on coordinates with epsilon
+         // 二次检查坐标，使用 epsilon
          const c1 = feat.geometry?.coordinates;
          const c2 = feature.geometry?.coordinates;
          if (c1 && c2) {
             const dx = Math.abs(c1[0] - c2[0]);
             const dy = Math.abs(c1[1] - c2[1]);
-            // Use a small epsilon for float comparison
+            // 使用小 epsilon 进行浮点比较
             if (dx < 0.000001 && dy < 0.000001) {
                targetD = d;
             }
@@ -444,14 +511,14 @@ const centerOnFeature = (feature) => {
   });
   
   if (targetD) {
-    console.log('[TagCloud] Found target tag:', targetD.name);
-    // ElMessage.success(`Locating: ${targetD.name}`); // Optional feedback
+    console.log('[TagCloud] 找到目标标签:', targetD.name);
     const width = tagCloudContainer.value.clientWidth;
     const height = tagCloudContainer.value.clientHeight;
-    // Increased scale to 4.0 and duration to 1000ms per user request
+    // 放大比例 2.0，时长 1000ms
     const scale = 2.0; 
     const duration = 1000; 
     
+    // 计算变换矩阵以将目标居中
     const t = d3.zoomIdentity
       .translate(width / 2, height / 2)
       .scale(scale)
@@ -461,72 +528,60 @@ const centerOnFeature = (feature) => {
       svgRef.transition().duration(duration).call(
         zoomBehavior.transform, t
       );
-    } else {
-      // Fallback if behavior not stored
-      svgRef.transition().duration(duration).call(
-        d3.zoom().transform, t
-      );
     }
   } else {
-    console.warn('[TagCloud] Could not find tag for feature in cloud');
+    console.warn('[TagCloud] 未找到目标标签，可能被过滤或未显示');
   }
 };
 
-defineExpose({ centerOnFeature });
-
+// 暴露方法给父组件调用
+defineExpose({
+  centerOnFeature
+});
 </script>
+
 <style scoped>
 .tag-cloud-wrapper {
   width: 100%;
   height: 100%;
   position: relative;
+  overflow: hidden;
 }
 
 .tag-cloud-container {
   width: 100%;
   height: 100%;
+  background-color: #001018; /* 深海蓝背景 */
 }
 
 .zoom-controls {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  bottom: 20px;
+  right: 20px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  padding: 8px;
+  border-radius: 8px;
   z-index: 10;
 }
 
 .zoom-btn {
-  width: 40px;
-  height: 40px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #ccc;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
   border-radius: 4px;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
 .zoom-btn:hover {
-  background: #f5f5f5;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
-}
-
-.zoom-btn:active {
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
-}
-
-.zoom-btn svg {
-  stroke: #333;
-}
-
-.zoom-btn:hover svg {
-  stroke: #007acc;
+  background: rgba(255, 255, 255, 0.2);
 }
 </style>

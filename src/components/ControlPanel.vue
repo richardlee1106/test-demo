@@ -13,7 +13,22 @@
       <!-- Filter control moved to MapContainer -->
 
       <!-- <el-button type="success" @click="debugShow">调试显示</el-button> -->
-      <el-button type="warning" @click="toggleDraw" class="control-btn">{{ drawEnabled ? '停止绘制' : '开始绘制' }}</el-button>
+      <el-select 
+        v-if="!drawEnabled"
+        v-model="selectedDrawMode" 
+        placeholder="绘制" 
+        class="control-btn draw-select"
+        @change="handleDrawModeChange"
+      >
+        <el-option label="绘制多边形" value="Polygon" />
+        <el-option label="绘制圆形（中心型）" value="Circle" />
+      </el-select>
+      <el-button 
+        v-else 
+        type="warning" 
+        @click="stopDraw" 
+        class="control-btn"
+      >停止绘制</el-button>
       <el-button type="primary" @click="run" class="control-btn">运行</el-button>
       <el-button type="info" @click="reset" class="control-btn">初始化</el-button>
     </div>
@@ -28,6 +43,7 @@ import { ElMessage } from 'element-plus';
 const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset']);
 const selectedGroup = ref('');
 const drawEnabled = ref(false);
+const selectedDrawMode = ref('');
 
 const groups = ref([
   { value: '餐饮美食', label: '餐饮美食' },
@@ -76,9 +92,19 @@ const run = () => {
 
 /* Removed toggleFilter since it's moved */
 
-const toggleDraw = () => {
-  drawEnabled.value = !drawEnabled.value;
-  emit('toggle-draw', drawEnabled.value);
+const handleDrawModeChange = (mode) => {
+  if (!mode) return;
+  drawEnabled.value = true;
+  emit('toggle-draw', { active: true, mode: mode });
+  // Reset selection so it can be selected again if needed, 
+  // though typically we stay in draw mode until stopped.
+  // selectedDrawMode.value = ''; // Don't reset immediately or the select disappears
+};
+
+const stopDraw = () => {
+  drawEnabled.value = false;
+  selectedDrawMode.value = ''; // Reset selection
+  emit('toggle-draw', { active: false });
 };
 
 const reset = () => {
@@ -89,6 +115,9 @@ const reset = () => {
 // Expose methods to parent
 const setDrawEnabled = (val) => {
   drawEnabled.value = val;
+  if (!val) {
+    selectedDrawMode.value = '';
+  }
 };
 
 defineExpose({ setDrawEnabled });
@@ -128,6 +157,10 @@ defineExpose({ setDrawEnabled });
 
 .group-select, .algorithm-select {
   width: 220px; /* Increased width */
+}
+
+.draw-select {
+  width: 120px;
 }
 
 .control-btn {
