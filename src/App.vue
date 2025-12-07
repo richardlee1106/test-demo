@@ -6,10 +6,12 @@
                     @toggle-draw="handleToggleDraw"
                     @debug-show="handleDebugShow"
                     @reset="handleReset"
+                    @search="handleSearch"
+                    @clear-search="handleClearSearch"
                     :on-run-algorithm="handleRunAlgorithm" />
     </header>
     <main class="bottom-split">
-      <section class="left-panel">
+      <section class="left-panel" :style="{ width: `calc(${splitPercentage}% - 6px)` }">
         <MapContainer ref="mapComponent" 
                       :poi-features="allPoiFeatures" 
                       :hovered-feature-id="hoveredFeatureId"
@@ -18,8 +20,15 @@
                       @hover-feature="handleFeatureHover"
                       @click-feature="handleFeatureClick"
                       @map-move-end="handleMapMoveEnd"
-                      @toggle-filter="handleToggleFilter" />
+                      @toggle-filter="handleToggleFilter"
+                      @toggle-overlay="handleToggleOverlay" />
       </section>
+      <div class="splitter" @mousedown="startDrag">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M8 12l-5 5 5 5V7zM16 12l5-5-5-5v10z" />
+          <path d="M4 12h16" stroke="currentColor" stroke-width="2" />
+        </svg>
+      </div>
       <section class="right-panel">
         <TagCloud ref="tagCloudRef"
                   :data="filteredTagData" 
@@ -71,6 +80,14 @@ const mapBounds = ref(null); // 当前地图视野边界 [minLon, minLat, maxLon
 const selectedDrawMode = ref(''); // 存储当前的绘图模式 ('Polygon' 或 'Circle')
 const circleCenterGeo = ref(null); // 存储圆心经纬度（用于地理布局校正）
 
+// Splitter 状态
+const splitPercentage = ref(50);
+const isDragging = ref(false);
+
+// 叠加模式状态
+const activeGroups = ref([]); // [{ name: 'A', features: [] }, ...]
+const overlayEnabled = ref(false);
+
 /**
  * 节流函数工具
  * 用于限制高频事件（如地图移动）的触发频率
@@ -108,6 +125,8 @@ const filteredTagData = computed(() => {
 
 onMounted(() => {
   window.addEventListener('resize', handleResize);
+  window.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', stopDrag);
 
   // 初始化标签云为空数据；用户需要显式加载数据
   tagData.value = [];
@@ -117,6 +136,9 @@ onMounted(() => {
 const handleResize = () => {
   if (map.value && typeof map.value.updateSize === 'function') {
     map.value.updateSize();
+  }
+  if (tagCloudRef.value && typeof tagCloudRef.value.resize === 'function') {
+    tagCloudRef.value.resize();
   }
 };
 
@@ -143,11 +165,127 @@ const handleRunAlgorithm = (payload) => {
  * 当用户上传文件或加载预设数据后触发
  * @param {Object} payload - { success, name, features }
  */
+/**
+ * 处理数据加载完成
+ * 当用户上传文件或加载预设数据后触发
+ * @param {Object} payload - { success, name, features }
+ */
 const handleDataLoaded = (payload) => {
   if (payload && payload.success && payload.features) {
-    allPoiFeatures.value = payload.features;
-    console.log(`[App] 数据已加载: ${payload.features.length} 个要素`);
+    const newGroup = { name: payload.name, features: payload.features };
+    
+    if (!overlayEnabled.value) {
+      // 覆盖模式：替换所有
+      activeGroups.value = [newGroup];
+    } else {
+      // 叠加模式：追加
+      // 检查是否已存在
+      const exists = activeGroups.value.find(g => g.name === payload.name);
+      if (!exists) {
+        if (activeGroups.value.length >= 3) {
+          ElMessage.warning('最多仅支持三类！');
+          return;
+        }
+        activeGroups.value.push(newGroup);
+      } else {
+        // 更新已存在的
+        Object.assign(exists, newGroup);
+      }
+    }
+    
+    updateAllPoiFeatures();
+    console.log(`[App] 数据已加载: 当前 ${activeGroups.value.length} 个分组`);
   }
+};
+
+/**
+ * 更新所有 POI 特征，合并所有活动分组并分配颜色索引
+ */
+function updateAllPoiFeatures() {
+  let merged = [];
+  activeGroups.value.forEach((group, index) => {
+    // 为每个 feature 添加 _groupIndex 属性
+    const taggedFeatures = group.features.map(f => {
+      // 浅拷贝 feature 以避免修改原始数据（如果需要多次使用）
+      // 但这里为了性能直接修改 properties 也可以，或者使用 Object.create
+      // 为了安全，最好是克隆 properties
+      const newProps = { ...f.properties, _groupIndex: index };
+      return { ...f, properties: newProps };
+    });
+    merged = merged.concat(taggedFeatures);
+  });
+  allPoiFeatures.value = merged;
+}
+
+const handleToggleOverlay = (val) => {
+  overlayEnabled.value = val;
+  if (!val && activeGroups.value.length > 1) {
+    // 如果关闭叠加，保留最后一个选中的
+    activeGroups.value = [activeGroups.value[activeGroups.value.length - 1]];
+    updateAllPoiFeatures();
+  }
+};
+
+const handleSearch = (keyword) => {
+  if (!keyword || !keyword.trim()) {
+    // 恢复显示所有选中点
+    tagData.value = selectedFeatures.value;
+    if (mapComponent.value) {
+      mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
+    }
+    return;
+  }
+  
+  const kw = keyword.trim().toLowerCase();
+  const filtered = selectedFeatures.value.filter(f => {
+    const name = f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
+    return name.toLowerCase().includes(kw);
+  });
+  
+  tagData.value = filtered;
+  if (mapComponent.value) {
+    mapComponent.value.showHighlights(filtered, { full: true });
+  }
+  
+  ElMessage.success(`找到 ${filtered.length} 条信息！`);
+};
+
+const handleClearSearch = () => {
+  // 恢复显示所有选中点
+  tagData.value = selectedFeatures.value;
+  // 恢复默认算法为动态重心引力
+  selectedAlgorithm.value = 'basic';
+  if (mapComponent.value) {
+    mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
+  }
+  ElMessage.info('已清除查询结果');
+};
+
+// 分隔条拖拽处理
+const startDrag = () => {
+  isDragging.value = true;
+  document.body.style.cursor = 'col-resize';
+};
+
+const onDrag = (e) => {
+  if (!isDragging.value) return;
+  const containerWidth = document.body.clientWidth;
+  let percentage = (e.clientX / containerWidth) * 100;
+  
+  // 约束: 最小 20%, 最大 80%
+  if (percentage < 20) percentage = 20;
+  if (percentage > 80) percentage = 80;
+  
+  splitPercentage.value = percentage;
+  
+  // 触发地图和标签云的 resize
+  handleResize();
+};
+
+const stopDrag = () => {
+  isDragging.value = false;
+  document.body.style.cursor = '';
+  handleResize();
 };
 
 /**
@@ -363,18 +501,45 @@ html, body, #app {
   z-index: 1;
 }
 
-.left-panel, .right-panel { flex: 1; height: 100%; overflow: hidden; }
+.left-panel, .right-panel { 
+  /* flex: 1; Removed flex: 1 */
+  height: 100%; 
+  overflow: hidden; 
+}
 .left-panel { background: #000; }
-.right-panel { background: #001018; }
+.right-panel { 
+  background: #001018; 
+  flex: 1;
+  min-width: 0; /* Prevent flex item from overflowing */
+}
+
+.splitter {
+  width: 12px;
+  background: #2c3e50;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background 0.2s;
+  flex-shrink: 0; /* 防止分隔条收缩 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+}
+.splitter:hover, .splitter:active {
+  background: #3498db;
+}
 
 @media (max-width: 768px) {
   .bottom-split {
     flex-direction: column;
   }
   .left-panel, .right-panel {
-    width: 100%;
+    width: 100% !important; /* 强制全宽 */
     height: auto;
     flex: 1;
+  }
+  .splitter {
+    display: none; /* 移动端隐藏分隔条 */
   }
 }
 </style>

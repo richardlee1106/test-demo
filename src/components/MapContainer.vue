@@ -23,6 +23,16 @@
           inactive-text="关闭"
         />
       </div>
+      <div class="control-row">
+        <span class="filter-label">筛选叠加</span>
+        <el-switch 
+          v-model="overlayEnabled" 
+          @change="toggleOverlay"
+          inline-prompt
+          active-text="开启"
+          inactive-text="关闭"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -50,8 +60,9 @@ import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape } from 'ol/sty
  * click-feature: 当鼠标点击 POI 时触发
  * map-move-end: 当地图移动结束（视野变化）时触发
  * toggle-filter: 当切换实时过滤开关时触发
+ * toggle-overlay: 当切换叠加模式时触发
  */
-const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter']);
+const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay']);
 
 /**
  * 定义组件属性
@@ -75,6 +86,12 @@ let hoveredFeature = null;
 const filterEnabled = ref(false);
 // 热力图开关状态
 const heatmapEnabled = ref(false);
+// 叠加模式开关状态
+const overlayEnabled = ref(false);
+
+// 缓存当前绘制的几何图形，用于数据更新时重新筛选
+let currentGeometry = null;
+let currentGeometryType = null; // 'Polygon' | 'Circle'
 
 /**
  * 切换实时过滤状态
@@ -82,6 +99,10 @@ const heatmapEnabled = ref(false);
  */
 const toggleFilter = (val) => {
   emit('toggle-filter', val);
+};
+
+const toggleOverlay = (val) => {
+  emit('toggle-overlay', val);
 };
 
 // --- 图层定义 ---
@@ -119,13 +140,29 @@ const centerLayer = new VectorLayer({
 const highlightLayerSource = new VectorSource();
 const highlightLayer = new VectorLayer({
   source: highlightLayerSource,
-  style: new Style({
-    image: new CircleStyle({
-      radius: 6,
-      fill: new Fill({ color: 'rgba(255,0,0,0.4)' }), // 红色半透明填充
-      stroke: new Stroke({ color: 'red', width: 2 }), // 红色边框
-    }),
-  }),
+  style: function(feature) {
+    const raw = feature.get('__raw');
+    const groupIndex = raw?.properties?._groupIndex || 0;
+    
+    let color = 'rgba(255,0,0,0.4)'; // 默认红色
+    let strokeColor = 'red';
+    
+    if (groupIndex === 1) {
+      color = 'rgba(0,0,255,0.4)'; // 蓝色
+      strokeColor = 'blue';
+    } else if (groupIndex === 2) {
+      color = 'rgba(128,0,128,0.4)'; // 紫色
+      strokeColor = 'purple';
+    }
+
+    return new Style({
+      image: new CircleStyle({
+        radius: 6,
+        fill: new Fill({ color: color }),
+        stroke: new Stroke({ color: strokeColor, width: 2 }),
+      }),
+    });
+  },
   zIndex: 100 // 层级较高
 });
 
@@ -366,6 +403,14 @@ onBeforeUnmount(() => {
 // 监听 POI 数据变化，重建 OpenLayers 要素
 watch(() => props.poiFeatures, () => {
   rebuildPoiOlFeatures();
+  // 如果当前有绘制区域，重新筛选
+  if (currentGeometry && currentGeometryType) {
+    if (currentGeometryType === 'Polygon') {
+      onPolygonComplete(currentGeometry, true); // true 表示内部刷新
+    } else if (currentGeometryType === 'Circle') {
+      onCircleComplete(currentGeometry, true);
+    }
+  }
 }, { deep: true });
 
 /**
@@ -434,6 +479,8 @@ function openPolygonDraw(mode = 'Polygon') {
     centerLayerSource.clear();
     heatmapSource.clear();
     highlightLayerSource.clear();
+    currentGeometry = null;
+    currentGeometryType = null;
   });
 
   drawInteraction.on('drawend', (evt) => {
@@ -455,8 +502,13 @@ function openPolygonDraw(mode = 'Polygon') {
 /**
  * 圆形绘制完成回调
  * @param {Object} circleGeom - 圆形几何对象
+ * @param {boolean} isRefresh - 是否是数据更新引起的刷新
  */
-function onCircleComplete(circleGeom) {
+function onCircleComplete(circleGeom, isRefresh = false) {
+  if (!isRefresh) {
+    currentGeometry = circleGeom;
+    currentGeometryType = 'Circle';
+  }
   const center = circleGeom.getCenter();
   const radius = circleGeom.getRadius(); // 半径（地图单位，EPSG:3857下为米）
   
@@ -583,8 +635,13 @@ watch(heatmapEnabled, (val) => {
 /**
  * 多边形绘制完成回调
  * @param {Object} polygonGeom - 多边形几何对象
+ * @param {boolean} isRefresh - 是否是数据更新引起的刷新
  */
-function onPolygonComplete(polygonGeom) {
+function onPolygonComplete(polygonGeom, isRefresh = false) {
+  if (!isRefresh) {
+    currentGeometry = polygonGeom;
+    currentGeometryType = 'Polygon';
+  }
   const ringCoords = polygonGeom.getCoordinates()[0];
   const ringPixels = ringCoords.map((c) => map.value.getPixelFromCoordinate(c));
 
@@ -661,6 +718,8 @@ function clearPolygon() {
   centerLayerSource.clear();
   highlightLayerSource.clear();
   heatmapSource.clear();
+  currentGeometry = null;
+  currentGeometryType = null;
 }
 
 // 暴露给父组件的方法

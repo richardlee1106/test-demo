@@ -366,11 +366,14 @@ onMounted(() => {
   runLayout(props.algorithm);
 
   // 监听窗口大小调整，防抖动重新布局
-  window.addEventListener('resize', () => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => runLayout(props.algorithm), RESIZE_DEBOUNCE_MS);
-  });
+  window.addEventListener('resize', resize);
 });
+
+// 公开的 resize 方法，供父组件调用（如卷帘调整时）
+const resize = () => {
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => runLayout(props.algorithm), RESIZE_DEBOUNCE_MS);
+};
 
 function scheduleRunLayout() {
   if (debounceTimer) clearTimeout(debounceTimer);
@@ -536,7 +539,8 @@ const centerOnFeature = (feature) => {
 
 // 暴露方法给父组件调用
 defineExpose({
-  centerOnFeature
+  centerOnFeature,
+  resize
 });
 </script>
 

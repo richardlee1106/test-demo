@@ -1,16 +1,33 @@
 <template>
   <div class="control-panel">
     <div class="left-controls">
-      <el-select v-model="selectedGroup" placeholder="按地理语义分组" @change="handleGroupChange" class="group-select">
-        <el-option v-for="item in groups" :key="item.value" :label="item.label" :value="item.value"></el-option>
-      </el-select>
-      <el-select v-model="selectedAlgorithm" placeholder="算法选择" class="algorithm-select">
-        <el-option v-for="item in algorithms" :key="item.value" :label="item.label" :value="item.value"></el-option>
-      </el-select>
+      <div class="select-group">
+        <el-select v-model="selectedGroup" placeholder="按地理语义分组" @change="handleGroupChange" class="group-select">
+          <el-option v-for="item in groups" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        </el-select>
+        <el-select v-model="selectedAlgorithm" placeholder="算法选择" class="algorithm-select">
+          <el-option v-for="item in algorithms" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        </el-select>
+      </div>
+      
+      <!-- Search Control Moved Here -->
+      <div class="search-box">
+        <el-input 
+          v-model="searchKeyword" 
+          placeholder="输入关键词..." 
+          class="search-input"
+          clearable
+          @keyup.enter="handleSearch"
+        />
+        <el-button type="primary" @click="handleSearch">查询</el-button>
+        <el-button type="info" @click="handleClearSearch" title="清除查询结果">清除查询结果</el-button>
+      </div>
     </div>
     
     <div class="right-controls">
-      <!-- Filter control moved to MapContainer -->
+      <!-- Search Control Moved to Left -->
+
+      <!-- 实时过滤控件已移动到 MapContainer -->
 
       <!-- <el-button type="success" @click="debugShow">调试显示</el-button> -->
       <el-select 
@@ -40,10 +57,16 @@ import { ref } from 'vue';
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search']);
 const selectedGroup = ref('');
 const drawEnabled = ref(false);
 const selectedDrawMode = ref('');
+const searchKeyword = ref('');
+
+const props = defineProps({ 
+  onRunAlgorithm: Function,
+  searchOffset: { type: Number, default: 0 }
+});
 
 const groups = ref([
   { value: '餐饮美食', label: '餐饮美食' },
@@ -82,7 +105,16 @@ const handleGroupChange = async () => {
   }
 }
 
-const props = defineProps({ onRunAlgorithm: Function });
+const handleSearch = () => {
+  emit('search', searchKeyword.value);
+};
+
+const handleClearSearch = () => {
+  searchKeyword.value = '';
+  emit('clear-search');
+};
+
+// const props = defineProps({ onRunAlgorithm: Function }); // Merged above
 
 const run = () => {
   if (props.onRunAlgorithm) {
@@ -90,15 +122,15 @@ const run = () => {
   }
 };
 
-/* Removed toggleFilter since it's moved */
+/* 已移除 toggleFilter，因为它已移动 */
 
 const handleDrawModeChange = (mode) => {
   if (!mode) return;
   drawEnabled.value = true;
   emit('toggle-draw', { active: true, mode: mode });
-  // Reset selection so it can be selected again if needed, 
-  // though typically we stay in draw mode until stopped.
-  // selectedDrawMode.value = ''; // Don't reset immediately or the select disappears
+  // 重置选择，以便如果需要可以再次选择，
+  // 尽管通常我们在停止之前保持绘制模式。
+  // selectedDrawMode.value = ''; // 不要立即重置，否则选择框会消失
 };
 
 const stopDraw = () => {
@@ -139,20 +171,41 @@ defineExpose({ setDrawEnabled });
 }
 
 .left-controls {
-  flex: 1;
+  width: 50%;
   display: flex;
   align-items: center;
+  justify-content: space-between; /* Push search box to the right edge of this 50% container */
   gap: 16px;
   padding-left: 10px;
+  padding-right: 10px; /* Add padding to avoid touching the splitter area exactly */
+  box-sizing: border-box;
+}
+
+.select-group {
+  display: flex;
+  gap: 16px;
 }
 
 .right-controls {
-  flex: 1;
+  width: 50%;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 16px;
+  padding-left: 10px; /* Add padding to separate from splitter area */
   padding-right: 10px;
+  box-sizing: border-box;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* margin-right: auto; Removed */
+}
+
+.search-input {
+  width: 160px;
 }
 
 .group-select, .algorithm-select {
@@ -194,9 +247,9 @@ defineExpose({ setDrawEnabled });
   }
 
   .draw-select {
-    flex: 1 1 120px; /* 保证能显示“绘制...”文字 */
+    flex: 2; /* 保证能显示“绘制...”文字 */
     width: auto !important;
-    min-width: 120px;
+    min-width: 90px;
     display: block;
     padding: 0;
   }
