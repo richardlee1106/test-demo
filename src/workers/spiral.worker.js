@@ -27,8 +27,8 @@ function runSpiralLayout(tags, width, height, configOverrides) {
     console.log('[Worker] Running Spiral Layout');
 
     const config = {
-        fontMin: 28,
-        fontMax: 28,
+        fontMin: 18,
+        fontMax: 22,
         minGap: 5,
         density: 1.0,
         spiralB: 20,

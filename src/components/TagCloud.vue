@@ -327,8 +327,8 @@ const runLayout = (algorithm) => {
     spiralSpacing: Number(props.spiralConfig.spiralSpacing ?? 8),
     angleStep: Number(props.spiralConfig.angleStep ?? 0.2),
     minTagSpacing: Number(props.spiralConfig.minTagSpacing ?? 25),
-    fontMin: 8,
-    fontMax: 24
+    fontMin: 18,
+    fontMax: 22
   } : null;
   
   let boundaryPixels = null;

@@ -43,8 +43,8 @@ function runGeoLayout(tags, width, height, center, bounds, config) {
     // 使用 OffscreenCanvas 在 Worker 线程中测量文本宽高
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    const fontMin = config?.fontMin || 12;
-    const fontMax = config?.fontMax || 28;
+    const fontMin = config?.fontMin || 18;
+    const fontMax = config?.fontMax || 22;
 
     // 2. 注入中心标签 (Center Tag)
     // 用户希望在视觉中心显示“中心位置”文本
@@ -174,10 +174,42 @@ function runGeoLayout(tags, width, height, center, bounds, config) {
     // 4. D3 力导向模拟 (Force Simulation)
     // 使用自定义矩形碰撞检测以获得更紧凑的布局
     const simulation = d3.forceSimulation(allNodes)
-        .force('x', d3.forceX(d => d.isCenter ? width/2 : d.targetX).strength(0.05)) // 弱化引力以允许碰撞解决
-        .force('y', d3.forceY(d => d.isCenter ? height/2 : d.targetY).strength(0.05))
-        .alphaDecay(0.02)
+        .force('x', d3.forceX(d => d.isCenter ? width/2 : d.targetX).strength(0.2)) // 增强引力以保持地理位置
+        .force('y', d3.forceY(d => d.isCenter ? height/2 : d.targetY).strength(0.2))
+        .alphaDecay(0.05) // 加快衰减，尽快稳定
         .stop();
+
+    // 自定义象限约束力 (Quadrant Constraint Force)
+    // 强制标签尽量保持在相对于中心的正确地理象限内
+    const forceQuadrant = (alpha) => {
+        const k = alpha * 0.5; // 力度系数
+        for (const d of allNodes) {
+            if (d.isCenter) continue;
+            
+            // 判断地理方向
+            const isEast = (d.lon - centerLon) > 0;
+            const isNorth = (d.lat - centerLat) > 0;
+
+            // 屏幕中心
+            const cx = width / 2;
+            const cy = height / 2;
+
+            // X轴约束 (东 -> 右, 西 -> 左)
+            if (isEast && d.x < cx) {
+                d.vx += (cx - d.x) * k;
+            } else if (!isEast && d.x > cx) {
+                d.vx += (cx - d.x) * k;
+            }
+
+            // Y轴约束 (北 -> 上, 南 -> 下)
+            // 注意屏幕坐标 Y 向下增加，所以北(lat>0)应该对应 Y < cy
+            if (isNorth && d.y > cy) {
+                d.vy += (cy - d.y) * k;
+            } else if (!isNorth && d.y < cy) {
+                d.vy += (cy - d.y) * k;
+            }
+        }
+    };
 
     // 自定义矩形碰撞检测 (Custom Rectangular Collision)
     const rectCollide = (alpha) => {
@@ -252,8 +284,10 @@ function runGeoLayout(tags, width, height, center, bounds, config) {
 
     for (let i = 0; i < simSteps; ++i) {
         simulation.tick();
+        const alpha = simulation.alpha();
+        forceQuadrant(alpha); // 应用象限约束
         for (let k = 0; k < iterationsPerTick; k++) {
-            rectCollide(simulation.alpha());
+            rectCollide(alpha);
         }
     }
 

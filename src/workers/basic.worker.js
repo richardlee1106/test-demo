@@ -29,8 +29,8 @@ function runDynamicGravityLayout(tags, width, height, configOverrides) {
     console.log('[Worker] Running Dynamic Gravity Layout');
 
     const config = {
-        fontMin: 28,
-        fontMax: 28,
+        fontMin: 18,
+        fontMax: 22,
         padding: 2, // 最小间距
         spiralStep: 5, // 紧凑布局的小步长
         ...configOverrides

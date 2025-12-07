@@ -173,43 +173,44 @@ defineExpose({ setDrawEnabled });
     height: auto;
     gap: 8px;
     width: 100%;
+    padding: 4px 0;
   }
 
   .left-controls, .right-controls {
     flex: unset;
     width: 100%;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: center;
     padding: 0;
     gap: 8px;
-    flex-wrap: nowrap; /* 保持单行，利用 flex-grow */
+    flex-wrap: wrap; /* 允许换行 */
   }
 
   .group-select, .algorithm-select {
-    flex: 1;
-    width: auto !important; /* 覆盖内联样式或类样式 */
-    min-width: 0; /* 允许缩小 */
+    flex: 1 1 140px; /* 允许伸缩，设置最小宽度 */
+    width: auto !important; 
+    min-width: 140px;
+  }
+
+  .draw-select {
+    flex: 1 1 120px; /* 保证能显示“绘制...”文字 */
+    width: auto !important;
+    min-width: 120px;
+    display: block;
+    padding: 0;
   }
 
   .control-btn {
-    flex: 1;
-    min-width: 0;
+    flex: 1 1 70px; /* 按钮也允许伸缩 */
+    min-width: 70px;
     width: auto !important;
-    padding: 8px 4px; /* 减小内边距防止溢出 */
+    padding: 8px 10px;
     font-size: 13px;
-    display: flex;
+    display: inline-flex;
     justify-content: center;
     align-items: center;
-  }
-
-  /* 必须放在 control-btn 之后以覆盖样式 */
-  .draw-select {
-    flex: 2; /* 绘制按钮稍微宽一点 */
-    width: auto !important;
-    min-width: 90px; /* 确保能显示下Placeholder */
-    display: block; /* 重置 display，避免 flex 破坏 el-select 内部布局 */
-    padding: 0; /* 重置 padding */
+    white-space: nowrap;
   }
 }
 </style>

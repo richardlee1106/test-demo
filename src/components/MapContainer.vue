@@ -40,7 +40,7 @@ import { Draw } from 'ol/interaction';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
 import { fromLonLat, toLonLat } from 'ol/proj';
-import { Style, Fill, Stroke, Circle as CircleStyle } from 'ol/style';
+import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape } from 'ol/style';
 
 /**
  * 定义组件事件
@@ -98,8 +98,24 @@ const polygonLayer = new VectorLayer({
   zIndex: 50 // 层级较低
 });
 
-// 2. 高亮图层
-// 用于显示被选中的 POI（在多边形/圆形内部的点）
+// 2. 圆心标记图层 (蓝色五角星)
+const centerLayerSource = new VectorSource();
+const centerLayer = new VectorLayer({
+  source: centerLayerSource,
+  style: new Style({
+    image: new RegularShape({
+      points: 5,
+      radius: 10, // 尺寸比正常 POI 稍大
+      radius2: 5,
+      fill: new Fill({ color: '#0000FF' }), // 蓝色填充
+      stroke: new Stroke({ color: '#FFFFFF', width: 2 }) // 白色描边
+    })
+  }),
+  zIndex: 200 // 层级较高
+});
+
+// 3. 高亮图层
+// 用于显示选中的 POI
 const highlightLayerSource = new VectorSource();
 const highlightLayer = new VectorLayer({
   source: highlightLayerSource,
@@ -185,7 +201,7 @@ onMounted(() => {
   // 初始化地图
   map.value = new OlMap({
     target: mapContainer.value,
-    layers: [baseLayer, polygonLayer, heatmapLayer, highlightLayer, hoverLayer],
+    layers: [baseLayer, polygonLayer, heatmapLayer, highlightLayer, centerLayer, hoverLayer],
     view: new View({
       center: fromLonLat([114.307, 30.549]), // 默认中心点（武汉）
       zoom: 13,
@@ -412,6 +428,14 @@ function openPolygonDraw(mode = 'Polygon') {
   
   drawInteraction = new Draw({ source: polygonLayerSource, type: mode });
   
+  drawInteraction.on('drawstart', () => {
+    // 开始绘制新图形时，清空之前的图形和标记
+    polygonLayerSource.clear();
+    centerLayerSource.clear();
+    heatmapSource.clear();
+    highlightLayerSource.clear();
+  });
+
   drawInteraction.on('drawend', (evt) => {
     const geometry = evt.feature.getGeometry();
     const type = geometry.getType(); // 'Polygon' 或 'Circle'
@@ -467,6 +491,13 @@ function onCircleComplete(circleGeom) {
     x: map.value.getPixelFromCoordinate(center)[0], 
     y: map.value.getPixelFromCoordinate(center)[1] 
   };
+
+  // 添加圆心标记 (蓝色五角星)
+  centerLayerSource.clear();
+  const centerFeature = new Feature({
+    geometry: new Point(center)
+  });
+  centerLayerSource.addFeature(centerFeature);
 
   showHighlights(insideRaw, { full: true });
   
@@ -627,6 +658,7 @@ function pointInPolygonPixel(pt, ringPixels) {
 // 清空多边形、高亮和热力图
 function clearPolygon() {
   polygonLayerSource.clear();
+  centerLayerSource.clear();
   highlightLayerSource.clear();
   heatmapSource.clear();
 }
