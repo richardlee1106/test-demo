@@ -92,7 +92,7 @@
           <span>搜索</span>
         </div>
         <div class="menu-divider"></div>
-
+        
         <div
           class="menu-item"
           v-if="!drawEnabled"
@@ -131,8 +131,8 @@
           clearable
           @keyup.enter="handleSearchMobile"
         />
-        <el-button type="primary" @click="handleSearchMobile">查询</el-button>
-        <el-button type="info" @click="handleClearSearchMobile">清除</el-button>
+        <el-button type="primary" size="small" @click="handleSearchMobile">查询</el-button>
+        <el-button type="info" size="small" @click="handleClearSearchMobile">清除</el-button>
         <button class="close-btn" @click="showSearchOverlay = false">
           <svg
             viewBox="0 0 24 24"
@@ -459,7 +459,7 @@ defineExpose({ setDrawEnabled });
   z-index: 2001;
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  padding: 0 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
@@ -467,7 +467,7 @@ defineExpose({ setDrawEnabled });
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .search-input-overlay {
