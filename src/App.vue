@@ -165,11 +165,6 @@ const handleRunAlgorithm = (payload) => {
  * 当用户上传文件或加载预设数据后触发
  * @param {Object} payload - { success, name, features }
  */
-/**
- * 处理数据加载完成
- * 当用户上传文件或加载预设数据后触发
- * @param {Object} payload - { success, name, features }
- */
 const handleDataLoaded = (payload) => {
   if (payload && payload.success && payload.features) {
     const newGroup = { name: payload.name, features: payload.features };
@@ -502,7 +497,7 @@ html, body, #app {
 }
 
 .left-panel, .right-panel { 
-  /* flex: 1; Removed flex: 1 */
+  /* flex: 1; 已移除 flex: 1 */
   height: 100%; 
   overflow: hidden; 
 }
@@ -510,7 +505,7 @@ html, body, #app {
 .right-panel { 
   background: #001018; 
   flex: 1;
-  min-width: 0; /* Prevent flex item from overflowing */
+  min-width: 0; /* 防止 flex 项目溢出 */
 }
 
 .splitter {

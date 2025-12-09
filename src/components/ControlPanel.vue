@@ -1,53 +1,186 @@
 <template>
   <div class="control-panel">
-    <div class="left-controls">
+    <div class="left-controls desktop-only">
       <div class="select-group">
-        <el-select v-model="selectedGroup" placeholder="按地理语义分组" @change="handleGroupChange" class="group-select">
-          <el-option v-for="item in groups" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        <el-select
+          v-model="selectedGroup"
+          placeholder="按地理语义分组"
+          @change="handleGroupChange"
+          class="group-select"
+        >
+          <el-option
+            v-for="item in groups"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          ></el-option>
         </el-select>
-        <el-select v-model="selectedAlgorithm" placeholder="算法选择" class="algorithm-select">
-          <el-option v-for="item in algorithms" :key="item.value" :label="item.label" :value="item.value"></el-option>
+        <el-select
+          v-model="selectedAlgorithm"
+          placeholder="算法选择"
+          class="algorithm-select"
+        >
+          <el-option
+            v-for="item in algorithms"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          ></el-option>
         </el-select>
       </div>
-      
-      <!-- Search Control Moved Here -->
+
+      <!-- 搜索控件移动到这里 -->
       <div class="search-box">
-        <el-input 
-          v-model="searchKeyword" 
-          placeholder="输入关键词..." 
+        <el-input
+          v-model="searchKeyword"
+          placeholder="输入关键词..."
           class="search-input"
           clearable
           @keyup.enter="handleSearch"
         />
         <el-button type="primary" @click="handleSearch">查询</el-button>
-        <el-button type="info" @click="handleClearSearch" title="清除查询结果">清除查询结果</el-button>
+        <el-button type="info" @click="handleClearSearch" title="清除查询结果"
+          >清除查询结果</el-button
+        >
       </div>
     </div>
-    
-    <div class="right-controls">
-      <!-- Search Control Moved to Left -->
+
+    <!-- 移动端顶部栏 -->
+    <div class="mobile-top-bar mobile-only">
+      <el-select
+        v-model="selectedGroup"
+        placeholder="按地理语义分组"
+        @change="handleGroupChange"
+        class="group-select mobile-select"
+      >
+        <el-option
+          v-for="item in groups"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        ></el-option>
+      </el-select>
+      <el-select
+        v-model="selectedAlgorithm"
+        placeholder="算法选择"
+        class="algorithm-select mobile-select"
+      >
+        <el-option
+          v-for="item in algorithms"
+          :key="item.value"
+          :label="item.label"
+          :value="item.value"
+        ></el-option>
+      </el-select>
+      <button class="more-btn" @click="toggleMobileMenu">
+        <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="6" cy="12" r="2" />
+          <circle cx="18" cy="12" r="2" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- 移动端菜单遮罩层 -->
+    <div
+      v-if="showMobileMenu"
+      class="mobile-menu-overlay"
+      @click.self="showMobileMenu = false"
+    >
+      <div class="mobile-menu-content">
+        <div class="menu-item" @click="openSearchOverlay">
+          <span class="menu-icon">🔍</span>
+          <span>搜索</span>
+        </div>
+        <div class="menu-divider"></div>
+
+        <div
+          class="menu-item"
+          v-if="!drawEnabled"
+          @click="handleDrawModeChange('Polygon')"
+        >
+          <span class="menu-icon">✏️</span>
+          <span>绘制多边形</span>
+        </div>
+        <div
+          class="menu-item"
+          v-if="!drawEnabled"
+          @click="handleDrawModeChange('Circle')"
+        >
+          <span class="menu-icon">⭕</span>
+          <span>绘制圆形</span>
+        </div>
+        <div class="menu-item" v-else @click="stopDraw">
+          <span class="menu-icon">⏹️</span>
+          <span>停止绘制</span>
+        </div>
+
+        <div class="menu-divider"></div>
+        <div class="menu-item" @click="run">
+          <span class="menu-icon">▶️</span>
+          <span>运行</span>
+        </div>
+        <div class="menu-item" @click="reset">
+          <span class="menu-icon">🔄</span>
+          <span>初始化</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 搜索浮层 -->
+    <div v-if="showSearchOverlay" class="search-overlay">
+      <div class="search-overlay-content">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="输入关键词..."
+          class="search-input-overlay"
+          clearable
+          @keyup.enter="handleSearchMobile"
+        />
+        <el-button type="primary" @click="handleSearchMobile">查询</el-button>
+        <el-button type="info" @click="handleClearSearchMobile">清除</el-button>
+        <button class="close-btn" @click="showSearchOverlay = false">
+          <svg
+            viewBox="0 0 24 24"
+            width="24"
+            height="24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="right-controls desktop-only">
+      <!-- 搜索控件已移动到左侧 -->
 
       <!-- 实时过滤控件已移动到 MapContainer -->
 
+
       <!-- <el-button type="success" @click="debugShow">调试显示</el-button> -->
-      <el-select 
+      <el-select
         v-if="!drawEnabled"
-        v-model="selectedDrawMode" 
-        placeholder="绘制" 
+        v-model="selectedDrawMode"
+        placeholder="绘制"
         class="control-btn draw-select"
         @change="handleDrawModeChange"
       >
         <el-option label="绘制多边形" value="Polygon" />
         <el-option label="绘制圆形（中心型）" value="Circle" />
       </el-select>
-      <el-button 
-        v-else 
-        type="warning" 
-        @click="stopDraw" 
-        class="control-btn"
-      >停止绘制</el-button>
-      <el-button type="primary" @click="run" class="control-btn">运行</el-button>
-      <el-button type="info" @click="reset" class="control-btn">初始化</el-button>
+      <el-button v-else type="warning" @click="stopDraw" class="control-btn"
+        >停止绘制</el-button
+      >
+      <el-button type="primary" @click="run" class="control-btn"
+        >运行</el-button
+      >
+      <el-button type="info" @click="reset" class="control-btn"
+        >初始化</el-button
+      >
     </div>
   </div>
 </template>
@@ -62,8 +195,10 @@ const selectedGroup = ref('');
 const drawEnabled = ref(false);
 const selectedDrawMode = ref('');
 const searchKeyword = ref('');
+const showMobileMenu = ref(false);
+const showSearchOverlay = ref(false);
 
-const props = defineProps({ 
+const props = defineProps({
   onRunAlgorithm: Function,
   searchOffset: { type: Number, default: 0 }
 });
@@ -116,11 +251,7 @@ const handleClearSearch = () => {
 
 // const props = defineProps({ onRunAlgorithm: Function }); // Merged above
 
-const run = () => {
-  if (props.onRunAlgorithm) {
-    props.onRunAlgorithm(selectedAlgorithm.value);
-  }
-};
+
 
 /* 已移除 toggleFilter，因为它已移动 */
 
@@ -131,20 +262,47 @@ const handleDrawModeChange = (mode) => {
   // 重置选择，以便如果需要可以再次选择，
   // 尽管通常我们在停止之前保持绘制模式。
   // selectedDrawMode.value = ''; // 不要立即重置，否则选择框会消失
+  showMobileMenu.value = false; // 选择后关闭菜单
 };
-
 const stopDraw = () => {
   drawEnabled.value = false;
-  selectedDrawMode.value = ''; // Reset selection
+  selectedDrawMode.value = ''; // 重置选择
   emit('toggle-draw', { active: false });
+  showMobileMenu.value = false;
+};
+
+const run = () => {
+  if (props.onRunAlgorithm) {
+    props.onRunAlgorithm(selectedAlgorithm.value);
+  }
+  showMobileMenu.value = false;
 };
 
 const reset = () => {
   // 触发reset事件，由父组件处理清空逻辑
   emit('reset');
+  showMobileMenu.value = false;
 };
 
-// Expose methods to parent
+const toggleMobileMenu = () => {
+  showMobileMenu.value = !showMobileMenu.value;
+};
+
+const openSearchOverlay = () => {
+  showMobileMenu.value = false;
+  showSearchOverlay.value = true;
+};
+
+const handleSearchMobile = () => {
+  handleSearch();
+  // showSearchOverlay.value = false; // 可选：保留打开以查看结果或关闭？目前保持打开。
+};
+
+const handleClearSearchMobile = () => {
+  handleClearSearch();
+};
+
+// 向父组件暴露方法
 const setDrawEnabled = (val) => {
   drawEnabled.value = val;
   if (!val) {
@@ -158,7 +316,7 @@ defineExpose({ setDrawEnabled });
   if (!selectedGroup.value) {
     ElMessage.warning('请先选择地理语义分组');
     return;
-  }
+    }
   emit('debug-show', selectedGroup.value);
 }; */
 </script>
@@ -174,10 +332,10 @@ defineExpose({ setDrawEnabled });
   width: 50%;
   display: flex;
   align-items: center;
-  justify-content: space-between; /* Push search box to the right edge of this 50% container */
+  justify-content: space-between; /* 将搜索框推到此 50% 容器的右边缘 */
   gap: 16px;
   padding-left: 10px;
-  padding-right: 10px; /* Add padding to avoid touching the splitter area exactly */
+  padding-right: 10px; /* 添加内边距以避免紧贴分隔条区域 */
   box-sizing: border-box;
 }
 
@@ -192,7 +350,7 @@ defineExpose({ setDrawEnabled });
   align-items: center;
   justify-content: flex-start;
   gap: 16px;
-  padding-left: 10px; /* Add padding to separate from splitter area */
+  padding-left: 10px; /* 添加内边距以与分隔条区域分开 */
   padding-right: 10px;
   box-sizing: border-box;
 }
@@ -201,15 +359,16 @@ defineExpose({ setDrawEnabled });
   display: flex;
   align-items: center;
   gap: 8px;
-  /* margin-right: auto; Removed */
+  /* margin-right: auto; 已移除 */
 }
 
 .search-input {
   width: 160px;
 }
 
-.group-select, .algorithm-select {
-  width: 220px; /* Increased width */
+.group-select,
+.algorithm-select {
+  width: 220px; /* 增加宽度 */
 }
 
 .draw-select {
@@ -220,50 +379,136 @@ defineExpose({ setDrawEnabled });
   min-width: 80px;
 }
 
+.mobile-only {
+  display: none;
+}
+
+/* 移动端菜单样式 */
+.mobile-top-bar {
+  display: none; /* 桌面端默认隐藏 */
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  box-sizing: border-box;
+}
+
+.more-btn {
+  background: none;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 4px 8px;
+  color: #333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mobile-menu-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 2000;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mobile-menu-content {
+  width: 160px;
+  background: white;
+  height: 100%;
+  padding: 20px 0;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+}
+
+.menu-item {
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  font-size: 16px;
+  color: #333;
+}
+
+.menu-item:hover {
+  background: #f5f5f5;
+}
+
+.menu-icon {
+  font-size: 18px;
+  width: 24px;
+  text-align: center;
+}
+
+.menu-divider {
+  height: 1px;
+  background: #eee;
+  margin: 8px 0;
+}
+
+/* 搜索浮层样式 */
+.search-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 60px; /* 顶部栏区域高度 */
+  background: white;
+  z-index: 2001;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.search-overlay-content {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-input-overlay {
+  flex: 1;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #666;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+}
+
 @media (max-width: 768px) {
+  .desktop-only {
+    display: none !important;
+  }
+
+  .mobile-only {
+    display: flex !important;
+  }
+
   .control-panel {
-    flex-direction: column;
+    flex-direction: row; /* 顶部栏保持行布局 */
     height: auto;
-    gap: 8px;
-    width: 100%;
-    padding: 4px 0;
-  }
-
-  .left-controls, .right-controls {
-    flex: unset;
-    width: 100%;
-    display: flex;
-    justify-content: flex-start;
+    padding: 8px 0;
     align-items: center;
-    padding: 0;
-    gap: 8px;
-    flex-wrap: wrap; /* 允许换行 */
   }
 
-  .group-select, .algorithm-select {
-    flex: 1 1 140px; /* 允许伸缩，设置最小宽度 */
-    width: auto !important; 
-    min-width: 140px;
-  }
-
-  .draw-select {
-    flex: 2; /* 保证能显示“绘制...”文字 */
-    width: auto !important;
-    min-width: 90px;
-    display: block;
-    padding: 0;
-  }
-
-  .control-btn {
-    flex: 1 1 70px; /* 按钮也允许伸缩 */
-    min-width: 70px;
-    width: auto !important;
-    padding: 8px 10px;
-    font-size: 13px;
-    display: inline-flex;
-    justify-content: center;
-    align-items: center;
-    white-space: nowrap;
+  .mobile-select {
+    flex: 1;
+    min-width: 0; /* 允许收缩 */
   }
 }
 </style>

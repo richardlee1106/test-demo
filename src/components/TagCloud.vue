@@ -250,19 +250,23 @@ const runLayout = (algorithm) => {
      .attr('height', height)
      .style('background-color', 'rgba(255, 255, 255, 0.1)'); // 调试用背景色
 
-  // 设置缩放行为 (Zoom Behavior) 如果尚未设置
-    if (!svgRef || !zoomGroupRef) {
-      zoomBehavior = d3.zoom()
-        .scaleExtent([MIN_SCALE, MAX_SCALE]) // 设置缩放范围
-        .on('zoom', (event) => {
-          currentTransform = event.transform;
-          zoomGroup.attr('transform', currentTransform); // 应用变换
-        });
+  // 设置缩放行为 (Zoom Behavior)
+  if (!zoomBehavior) {
+    zoomBehavior = d3.zoom()
+      .scaleExtent([MIN_SCALE, MAX_SCALE]) // 设置缩放范围
+      .on('zoom', (event) => {
+        currentTransform = event.transform;
+        zoomGroup.attr('transform', currentTransform); // 应用变换
+      });
+  }
 
-      svg.call(zoomBehavior);
-      svgRef = svg;
-      zoomGroupRef = zoomGroup;
-    }
+  // 始终应用缩放行为，确保事件监听器存在
+  svg.call(zoomBehavior);
+  
+  if (!svgRef || !zoomGroupRef) {
+    svgRef = svg;
+    zoomGroupRef = zoomGroup;
+  }
 
   // 计算标签位置和选择标记
   // 提取需要的数据属性，构建轻量级对象发送给 Worker
