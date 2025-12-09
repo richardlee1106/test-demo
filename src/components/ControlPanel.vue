@@ -131,8 +131,8 @@
           clearable
           @keyup.enter="handleSearchMobile"
         />
-        <el-button type="primary" size="small" @click="handleSearchMobile">查询</el-button>
-        <el-button type="info" size="small" @click="handleClearSearchMobile">清除</el-button>
+        <el-button type="primary" @click="handleSearchMobile">查询</el-button>
+        <el-button type="info" @click="handleClearSearchMobile">清除</el-button>
         <button class="close-btn" @click="showSearchOverlay = false">
           <svg
             viewBox="0 0 24 24"
@@ -459,7 +459,8 @@ defineExpose({ setDrawEnabled });
   z-index: 2001;
   display: flex;
   align-items: center;
-  padding: 0 4px;
+  padding: 0 8px; /* 稍微减小内边距 */
+  box-sizing: border-box; /* 确保 padding 不会撑大 width */
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
@@ -467,7 +468,7 @@ defineExpose({ setDrawEnabled });
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 6px;
+  gap: 4px; /* 减小间距，让控件更紧凑 */
 }
 
 .search-input-overlay {
