@@ -89,7 +89,6 @@
     >
       <div class="mobile-menu-content">
         <div class="menu-item" @click="openSearchOverlay">
-          <span class="menu-icon">🔍</span>
           <span>搜索</span>
         </div>
         <div class="menu-divider"></div>
@@ -99,7 +98,6 @@
           v-if="!drawEnabled"
           @click="handleDrawModeChange('Polygon')"
         >
-          <span class="menu-icon">✏️</span>
           <span>绘制多边形</span>
         </div>
         <div
@@ -107,21 +105,17 @@
           v-if="!drawEnabled"
           @click="handleDrawModeChange('Circle')"
         >
-          <span class="menu-icon">⭕</span>
           <span>绘制圆形</span>
         </div>
         <div class="menu-item" v-else @click="stopDraw">
-          <span class="menu-icon">⏹️</span>
           <span>停止绘制</span>
         </div>
 
         <div class="menu-divider"></div>
         <div class="menu-item" @click="run">
-          <span class="menu-icon">▶️</span>
           <span>运行</span>
         </div>
         <div class="menu-item" @click="reset">
-          <span class="menu-icon">🔄</span>
           <span>初始化</span>
         </div>
       </div>
@@ -419,7 +413,7 @@ defineExpose({ setDrawEnabled });
 }
 
 .mobile-menu-content {
-  width: 160px;
+  width: 120px;
   background: white;
   height: 100%;
   padding: 20px 0;
