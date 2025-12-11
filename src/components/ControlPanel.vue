@@ -1,6 +1,6 @@
 <template>
   <div class="control-panel">
-    <div class="left-controls desktop-only">
+    <div v-if="isMapPanel" class="left-controls" :class="{ 'full-width': isMapPanel }">
       <div class="select-group">
         <el-select
           v-model="selectedGroup"
@@ -16,9 +16,10 @@
           ></el-option>
         </el-select>
         <el-select
-          v-model="selectedAlgorithm"
+          v-model="localAlgorithm"
           placeholder="算法选择"
           class="algorithm-select"
+          @change="handleAlgorithmChange"
         >
           <el-option
             v-for="item in algorithms"
@@ -29,7 +30,6 @@
         </el-select>
       </div>
 
-      <!-- 搜索控件移动到这里 -->
       <div class="search-box">
         <el-input
           v-model="searchKeyword"
@@ -61,9 +61,10 @@
         ></el-option>
       </el-select>
       <el-select
-        v-model="selectedAlgorithm"
+        v-model="localAlgorithm"
         placeholder="算法选择"
         class="algorithm-select mobile-select"
+        @change="handleAlgorithmChange"
       >
         <el-option
           v-for="item in algorithms"
@@ -149,7 +150,7 @@
       </div>
     </div>
 
-    <div class="right-controls desktop-only">
+    <div v-if="isTagPanel" class="right-controls" :class="{ 'full-width': isTagPanel }">
       <!-- 搜索控件已移动到左侧 -->
 
       <!-- 实时过滤控件已移动到 MapContainer -->
@@ -180,11 +181,11 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, computed, watch } from 'vue';
 import axios from 'axios';
 import { ElMessage } from 'element-plus';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm']);
 const selectedGroup = ref('');
 const drawEnabled = ref(false);
 const selectedDrawMode = ref('');
@@ -194,8 +195,13 @@ const showSearchOverlay = ref(false);
 
 const props = defineProps({
   onRunAlgorithm: Function,
-  searchOffset: { type: Number, default: 0 }
+  searchOffset: { type: Number, default: 0 },
+  panelType: { type: String, default: 'map' }, // 'map' (地图) 或 'tag' (标签)
+  currentAlgorithm: { type: String, default: 'basic' }
 });
+
+const isMapPanel = computed(() => props.panelType === 'map');
+const isTagPanel = computed(() => props.panelType === 'tag');
 
 const groups = ref([
   { value: '餐饮美食', label: '餐饮美食' },
@@ -219,7 +225,16 @@ const algorithms = ref([
   { value: 'spiral', label: '阿基米德螺线' },
 ]);
 
-const selectedAlgorithm = ref('basic'); // 设置为默认
+const localAlgorithm = ref(props.currentAlgorithm);
+
+// 监听 props 变化更新本地状态
+watch(() => props.currentAlgorithm, (newVal) => {
+  localAlgorithm.value = newVal;
+});
+
+const handleAlgorithmChange = (val) => {
+  emit('update:currentAlgorithm', val);
+};
 
 const handleGroupChange = async () => {
   if (!selectedGroup.value) return;
@@ -267,7 +282,8 @@ const stopDraw = () => {
 
 const run = () => {
   if (props.onRunAlgorithm) {
-    props.onRunAlgorithm(selectedAlgorithm.value);
+    // 传递当前算法给父组件（或者父组件直接使用自己的状态）
+    props.onRunAlgorithm(localAlgorithm.value);
   }
   showMobileMenu.value = false;
 };
@@ -347,6 +363,28 @@ defineExpose({ setDrawEnabled });
   padding-left: 10px; /* 添加内边距以与分隔条区域分开 */
   padding-right: 10px;
   box-sizing: border-box;
+}
+
+/* 适配全宽模式 */
+.left-controls.full-width,
+.right-controls.full-width {
+  width: 100%;
+  padding: 8px; /* 增加内边距 */
+  min-height: 56px; /* 确保最小高度，允许自适应 */
+  background: #333; /* 背景色 */
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap; /* 允许换行 */
+}
+
+/* 地图控件 - 左对齐（默认） */
+.left-controls.full-width {
+  justify-content: flex-start;
+}
+
+/* 标签控件 - 右对齐 */
+.right-controls.full-width {
+  justify-content: flex-end;
 }
 
 .search-box {

@@ -1,7 +1,33 @@
 <template>
   <div id="app" class="app-layout">
-    <header class="top-controls">
-      <ControlPanel ref="controlPanelRef"
+    <!-- 桌面端顶部栏 -->
+    <header class="fixed-top-header desktop-only-flex">
+      <div class="header-left">
+        <ControlPanel ref="controlPanelRefMap"
+                      panel-type="map"
+                      :current-algorithm="selectedAlgorithm"
+                      @update:current-algorithm="(val) => selectedAlgorithm = val"
+                      @data-loaded="handleDataLoaded"
+                      @search="handleSearch"
+                      @clear-search="handleClearSearch" />
+      </div>
+      <div class="header-right">
+        <ControlPanel ref="controlPanelRefTag"
+                      panel-type="tag"
+                      :current-algorithm="selectedAlgorithm"
+                      @toggle-draw="handleToggleDraw"
+                      @debug-show="handleDebugShow"
+                      @reset="handleReset"
+                      :on-run-algorithm="handleRunAlgorithm" />
+      </div>
+    </header>
+
+    <!-- 移动端顶部栏 -->
+    <header class="mobile-header mobile-only-block">
+      <ControlPanel ref="controlPanelRefMobile"
+                    panel-type="mobile"
+                    :current-algorithm="selectedAlgorithm"
+                    @update:current-algorithm="(val) => selectedAlgorithm = val"
                     @data-loaded="handleDataLoaded"
                     @toggle-draw="handleToggleDraw"
                     @debug-show="handleDebugShow"
@@ -12,16 +38,18 @@
     </header>
     <main class="bottom-split">
       <section class="left-panel" :style="{ width: `calc(${splitPercentage}% - 6px)` }">
-        <MapContainer ref="mapComponent" 
-                      :poi-features="allPoiFeatures" 
-                      :hovered-feature-id="hoveredFeatureId"
-                      @polygon-completed="handlePolygonCompleted" 
-                      @map-ready="handleMapReady"
-                      @hover-feature="handleFeatureHover"
-                      @click-feature="handleFeatureClick"
-                      @map-move-end="handleMapMoveEnd"
-                      @toggle-filter="handleToggleFilter"
-                      @toggle-overlay="handleToggleOverlay" />
+        <div class="panel-content">
+          <MapContainer ref="mapComponent" 
+                        :poi-features="allPoiFeatures" 
+                        :hovered-feature-id="hoveredFeatureId"
+                        @polygon-completed="handlePolygonCompleted" 
+                        @map-ready="handleMapReady"
+                        @hover-feature="handleFeatureHover"
+                        @click-feature="handleFeatureClick"
+                        @map-move-end="handleMapMoveEnd"
+                        @toggle-filter="handleToggleFilter"
+                        @toggle-overlay="handleToggleOverlay" />
+        </div>
       </section>
       <div class="splitter" @mousedown="startDrag">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
@@ -30,19 +58,21 @@
         </svg>
       </div>
       <section class="right-panel">
-        <TagCloud ref="tagCloudRef"
-                  :data="filteredTagData" 
-                  :map="map" 
-                  :algorithm="selectedAlgorithm" 
-                  :selectedBounds="selectedBounds" 
-                  :polygonCenter="polygonCenter" 
-                  :spiralConfig="spiralConfig" 
-                  :boundaryPolygon="selectedPolygon"
-                  :hovered-feature-id="hoveredFeatureId"
-                  :draw-mode="selectedDrawMode"
-                  :circle-center="circleCenterGeo"
-                  @hover-feature="handleFeatureHover"
-                  @locate-feature="handleFeatureLocate" />
+        <div class="panel-content">
+          <TagCloud ref="tagCloudRef"
+                    :data="filteredTagData" 
+                    :map="map" 
+                    :algorithm="selectedAlgorithm" 
+                    :selectedBounds="selectedBounds" 
+                    :polygonCenter="polygonCenter" 
+                    :spiralConfig="spiralConfig" 
+                    :boundaryPolygon="selectedPolygon"
+                    :hovered-feature-id="hoveredFeatureId"
+                    :draw-mode="selectedDrawMode"
+                    :circle-center="circleCenterGeo"
+                    @hover-feature="handleFeatureHover"
+                    @locate-feature="handleFeatureLocate" />
+        </div>
       </section>
     </main>
   </div>
@@ -56,14 +86,17 @@ import TagCloud from './components/TagCloud.vue';
 import MapContainer from './components/MapContainer.vue';
 
 // 组件引用
-const controlPanelRef = ref(null);
+// 组件引用
+const controlPanelRefMap = ref(null);
+const controlPanelRefTag = ref(null);
+const controlPanelRefMobile = ref(null);
 const tagCloudRef = ref(null);
 const mapComponent = ref(null);
 
 // 核心数据状态
 const map = ref(null); // OpenLayers 地图实例
 const tagData = ref([]); // 传递给 TagCloud 的数据（通常是选中区域的 POI）
-const selectedAlgorithm = ref('spiral'); // 当前选择的布局算法
+const selectedAlgorithm = ref('basic'); // 当前选择的布局算法
 const spiralConfig = ref(null); // 螺旋布局配置
 const selectedBounds = ref(null); // 选中区域的边界
 const allPoiFeatures = ref([]); // 所有加载的 POI 数据（虽然加载了但在未过滤前可能不全部显示）
@@ -384,8 +417,12 @@ const handlePolygonCompleted = (payload) => {
   console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素`);
   
   // 同步控制面板状态（自动关闭绘制按钮状态）
-  if (controlPanelRef.value) {
-    controlPanelRef.value.setDrawEnabled(false);
+  // 同步控制面板状态（自动关闭绘制按钮状态）
+  if (controlPanelRefTag.value) {
+    controlPanelRefTag.value.setDrawEnabled(false);
+  }
+  if (controlPanelRefMobile.value) {
+    controlPanelRefMobile.value.setDrawEnabled(false);
   }
   
   if (!inside.length) {
@@ -440,8 +477,12 @@ function handleReset() {
   }
   
   // 重置控制面板状态
-  if (controlPanelRef.value) {
-    controlPanelRef.value.setDrawEnabled(false);
+  // 重置控制面板状态
+  if (controlPanelRefTag.value) {
+    controlPanelRefTag.value.setDrawEnabled(false);
+  }
+  if (controlPanelRefMobile.value) {
+    controlPanelRefMobile.value.setDrawEnabled(false);
   }
   
   console.log('[App] 已重置所有数据');
@@ -465,26 +506,53 @@ html, body, #app {
   overflow: hidden;
 }
 
-.top-controls {
-  flex: 0 0 56px; /* 固定高度 */
-  background: #333; /* 深灰色背景 */
-  padding: 8px;
-  box-sizing: border-box;
-  color: #fff;
+/* .top-controls 已移除 */
+
+.fixed-top-header {
+  flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 2000; /* 确保在地图之上 */
-  position: relative;
+  width: 100%;
+  background: #333;
+  z-index: 2000;
+  border-bottom: 1px solid #444;
+}
+
+.header-left, .header-right {
+  width: 50%;
+  box-sizing: border-box;
+}
+
+.header-left {
+  border-right: 1px solid #444;
+}
+
+.mobile-header {
+  flex: 0 0 auto;
+  width: 100%;
+  background: #333;
+  z-index: 2000;
+  border-bottom: 1px solid #444;
+  min-height: 50px;
+}
+
+.desktop-only-flex {
+  display: flex;
+}
+
+.mobile-only-block {
+  display: none;
 }
 
 @media (max-width: 768px) {
-  .top-controls {
-    flex: 0 0 auto; /* 允许高度自适应 */
-    height: auto;
-    min-height: 56px;
-    padding: 8px;
-    flex-wrap: wrap;
+  .desktop-only-flex {
+    display: none !important;
+  }
+  .mobile-only-block {
+    display: block !important;
+  }
+  
+  .fixed-top-header {
+    display: none;
   }
 }
 
@@ -500,12 +568,23 @@ html, body, #app {
   /* flex: 1; 已移除 flex: 1 */
   height: 100%; 
   overflow: hidden; 
+  display: flex !important; /* 强制 flex 布局 */
+  flex-direction: column;
 }
 .left-panel { background: #000; }
 .right-panel { 
   background: #001018; 
   flex: 1;
   min-width: 0; /* 防止 flex 项目溢出 */
+}
+
+/* .panel-header 已移除 */
+
+.panel-content {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  width: 100%;
 }
 
 .splitter {
