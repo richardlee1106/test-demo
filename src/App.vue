@@ -517,8 +517,13 @@ html, body, #app {
   border-bottom: 1px solid #444;
 }
 
-.header-left, .header-right {
-  width: 50%;
+.header-left {
+  width: 53%;
+  box-sizing: border-box;
+}
+
+.header-right {
+  width: 47%;
   box-sizing: border-box;
 }
 

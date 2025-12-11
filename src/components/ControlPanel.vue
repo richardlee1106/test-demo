@@ -400,7 +400,7 @@ defineExpose({ setDrawEnabled });
 
 .group-select,
 .algorithm-select {
-  width: 220px; /* 增加宽度 */
+  width: 200px; /* 减小宽度以适应布局 */
 }
 
 .draw-select {
