@@ -527,16 +527,7 @@ function onCircleComplete(circleGeom, isRefresh = false) {
     }
   }
   
-  // 更新热力图数据
-  heatmapSource.clear();
-  if (insideRaw.length > 0) {
-     const feats = insideRaw.map(raw => {
-        if (rawToOlMap.has(raw)) return rawToOlMap.get(raw);
-        const [lon, lat] = raw.geometry.coordinates;
-        return new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
-     });
-     heatmapSource.addFeatures(feats);
-  }
+  // 热力图数据会在 showHighlights 中自动同步更新
 
   // 计算 TagCloud 定位的中心像素点（使用圆心）
   const centerPixelObj = { 
@@ -596,6 +587,9 @@ function clearHighlights() {
  */
 function showHighlights(features, options = {}) {
   clearHighlights();
+  // 同时清空并更新热力图数据源，使热力图与高亮图层保持同步
+  heatmapSource.clear();
+  
   if (!features || !features.length) return;
   const full = !!options.full;
   let subset = features;
@@ -619,6 +613,17 @@ function showHighlights(features, options = {}) {
   };
   const feats = subset.map(toFeature);
   highlightLayerSource.addFeatures(feats);
+  
+  // 同步更新热力图数据源
+  // 热力图使用全量数据（features）而非采样数据（subset），以保证热力图的准确性
+  if (features.length > 0) {
+    const heatmapFeats = features.map(raw => {
+      if (rawToOlMap.has(raw)) return rawToOlMap.get(raw);
+      const [lon, lat] = raw.geometry.coordinates;
+      return new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
+    });
+    heatmapSource.addFeatures(heatmapFeats);
+  }
 }
 
 
@@ -655,16 +660,7 @@ function onPolygonComplete(polygonGeom, isRefresh = false) {
     }
   }
   
-  // 更新热力图数据
-  heatmapSource.clear();
-  if (insideRaw.length > 0) {
-     const feats = insideRaw.map(raw => {
-        if (rawToOlMap.has(raw)) return rawToOlMap.get(raw);
-        const [lon, lat] = raw.geometry.coordinates;
-        return new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
-     });
-     heatmapSource.addFeatures(feats);
-  }
+  // 热力图数据会在 showHighlights 中自动同步更新
 
   // 计算多边形中心点
   const centerPixelObj = calculatePolygonCenter(ringPixels);
