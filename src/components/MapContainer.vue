@@ -42,7 +42,6 @@ import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
 import OlMap from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
-import HeatmapLayer from 'ol/layer/Heatmap';
 import XYZ from 'ol/source/XYZ';
 import VectorSource from 'ol/source/Vector';
 import { Vector as VectorLayer } from 'ol/layer';
@@ -51,6 +50,11 @@ import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
 import { fromLonLat, toLonLat } from 'ol/proj';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape } from 'ol/style';
+
+// deck.gl 高性能渲染
+import { Deck } from '@deck.gl/core';
+import { ScatterplotLayer } from '@deck.gl/layers';
+import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
 
 /**
  * 定义组件事件
@@ -107,127 +111,224 @@ const toggleOverlay = (val) => {
 
 // --- 图层定义 ---
 
-// 1. 多边形绘制图层
-// 用于显示用户绘制的多边形或圆形区域
+// 1. 多边形绘制图层（保留 OpenLayers，用于绘制交互）
 const polygonLayerSource = new VectorSource();
 const polygonLayer = new VectorLayer({
   source: polygonLayerSource,
   style: new Style({
-    stroke: new Stroke({ color: '#2ecc71', width: 2 }), // 绿色边框
-    fill: new Fill({ color: 'rgba(46,204,113,0.1)' }), // 浅绿色填充
+    stroke: new Stroke({ color: '#2ecc71', width: 2 }),
+    fill: new Fill({ color: 'rgba(46,204,113,0.1)' }),
   }),
-  zIndex: 50 // 层级较低
+  zIndex: 50
 });
 
-// 2. 圆心标记图层 (蓝色五角星)
+// 2. 圆心标记图层（保留 OpenLayers）
 const centerLayerSource = new VectorSource();
 const centerLayer = new VectorLayer({
   source: centerLayerSource,
   style: new Style({
     image: new RegularShape({
       points: 5,
-      radius: 10, // 尺寸比正常 POI 稍大
+      radius: 10,
       radius2: 5,
-      fill: new Fill({ color: '#0000FF' }), // 蓝色填充
-      stroke: new Stroke({ color: '#FFFFFF', width: 2 }) // 白色描边
+      fill: new Fill({ color: '#0000FF' }),
+      stroke: new Stroke({ color: '#FFFFFF', width: 2 })
     })
   }),
-  zIndex: 200 // 层级较高
+  zIndex: 200
 });
 
-// 3. 高亮图层
-// 用于显示选中的 POI
-const highlightLayerSource = new VectorSource();
-const highlightLayer = new VectorLayer({
-  source: highlightLayerSource,
-  style: function(feature) {
-    const raw = feature.get('__raw');
-    const groupIndex = raw?.properties?._groupIndex || 0;
-    
-    let color = 'rgba(255,0,0,0.4)'; // 默认红色
-    let strokeColor = 'red';
-    
-    if (groupIndex === 1) {
-      color = 'rgba(0,0,255,0.4)'; // 蓝色
-      strokeColor = 'blue';
-    } else if (groupIndex === 2) {
-      color = 'rgba(128,0,128,0.4)'; // 紫色
-      strokeColor = 'purple';
-    }
-
-    return new Style({
-      image: new CircleStyle({
-        radius: 6,
-        fill: new Fill({ color: color }),
-        stroke: new Stroke({ color: strokeColor, width: 2 }),
-      }),
-    });
-  },
-  zIndex: 100 // 层级较高
-});
-
-// 3. 热力图图层
-// 用于显示 POI 的密度分布
-const heatmapSource = new VectorSource();
-const heatmapLayer = new HeatmapLayer({
-  source: heatmapSource,
-  blur: 15, // 模糊度
-  radius: 8, // 半径
-  zIndex: 90, // 位于高亮图层之下，多边形图层之上
-  visible: false, // 默认隐藏
-});
-
-// 4. 悬停高亮图层
-// 专门用于显示单个被悬停的 POI（无论是来自地图悬停还是 TagCloud 悬停）
+// 3. 悬停高亮图层（保留 OpenLayers，仅用于单个悬停点）
 const hoverLayerSource = new VectorSource();
 const hoverLayer = new VectorLayer({
   source: hoverLayerSource,
   style: new Style({
     image: new CircleStyle({
-      radius: 9, // 1.5倍大小
-      fill: new Fill({ color: 'rgba(255, 165, 0, 0.8)' }), // 橙色高亮
-      stroke: new Stroke({ color: '#fff', width: 2 }), // 白色描边
+      radius: 9,
+      fill: new Fill({ color: 'rgba(255, 165, 0, 0.8)' }),
+      stroke: new Stroke({ color: '#fff', width: 2 }),
     }),
-    zIndex: 999 // 最高层级
+    zIndex: 999
   }),
   zIndex: 200
 });
 
-// 缓存的 OpenLayers Feature 对象，用于优化性能
-// 避免每次渲染都重新创建 Feature
+// 4. 定位高亮图层（水蓝色五角星，最高层级）
+const locateLayerSource = new VectorSource();
+const locateLayer = new VectorLayer({
+  source: locateLayerSource,
+  style: new Style({
+    image: new RegularShape({
+      points: 5,
+      radius: 8,
+      radius2: 6,
+      fill: new Fill({ color: '#00BFFF' }),      // 水蓝色填充
+      stroke: new Stroke({ color: '#0080FF', width: 1 })  // 深蓝色描边
+    })
+  }),
+  zIndex: 300
+});
+
+// --- deck.gl 高性能渲染层 ---
+// 使用 deck.gl 替代 OpenLayers 的 VectorLayer 和 HeatmapLayer
+// deck.gl 使用 WebGL 渲染，可以处理数万个点而不卡顿
+
+let deckInstance = null; // deck.gl 实例
+let deckContainer = null; // deck.gl 的 canvas 容器
+const highlightData = ref([]); // 用于 deck.gl ScatterplotLayer 的高亮数据
+const heatmapData = ref([]); // 用于 deck.gl HeatmapLayer 的热力图数据
+
+// 当前定位的 POI（用于在 deck.gl 中隐藏该点，用 OpenLayers 显示五角星）
+let currentLocatedPoi = null;
+
+// 缓存的 OpenLayers Feature 对象（仅用于绘制筛选）
 let olPoiFeatures = [];
 // 映射表：原始数据对象 -> OpenLayers Feature 对象
 let rawToOlMap = new Map();
 
 /**
- * 动态更新热力图样式
- * 根据地图缩放级别自动调整热力点的半径和模糊度
- * 缩放级别大（视角近）：半径小，显示离散点
- * 缩放级别小（视角远）：半径大，显示聚合效果
+ * 获取 deck.gl 视图状态（从 OpenLayers 同步）
  */
-function updateHeatmapStyle() {
-  if (!map.value) return;
-  const zoom = map.value.getView().getZoom();
+function getDeckViewState() {
+  if (!map.value) {
+    return { longitude: 114.307, latitude: 30.549, zoom: 12, bearing: 0, pitch: 0 };
+  }
+  const view = map.value.getView();
+  const center = view.getCenter();
+  const zoom = view.getZoom();
+  const rotation = view.getRotation();
   
-  const minZ = 10;
-  const maxZ = 18;
-  // 限制缩放级别范围
+  if (!center || zoom === undefined) {
+    return { longitude: 114.307, latitude: 30.549, zoom: 12, bearing: 0, pitch: 0 };
+  }
+  
+  // 将 EPSG:3857 坐标转换为经纬度
+  const [lon, lat] = toLonLat(center);
+  
+  return {
+    longitude: lon,
+    latitude: lat,
+    zoom: zoom - 1, // deck.gl vs OpenLayers zoom 偏移
+    bearing: (-rotation * 180) / Math.PI,
+    pitch: 0,
+  };
+}
+
+/**
+ * 根据分组索引获取颜色
+ */
+function getColorByGroupIndex(groupIndex) {
+  const colors = [
+    [255, 0, 0, 160],    // 红色
+    [0, 0, 255, 160],    // 蓝色
+    [128, 0, 128, 160],  // 紫色
+  ];
+  return colors[groupIndex] || colors[0];
+}
+
+/**
+ * 更新 deck.gl 图层
+ */
+function updateDeckLayers() {
+  if (!deckInstance) return;
+  
+  const zoom = map.value?.getView()?.getZoom() || 13;
+  
+  // 根据缩放级别动态调整热力图参数
+  const minZ = 10, maxZ = 16;
   const clampedZoom = Math.max(minZ, Math.min(maxZ, zoom));
-  // 计算比例 0 (远) -> 1 (近)
-  const ratio = (clampedZoom - minZ) / (maxZ - minZ); 
+  const ratio = (clampedZoom - minZ) / (maxZ - minZ);
+  // 增大热力图半径范围: 远 -> 80, 近 -> 30
+  const heatmapRadius = Math.round(90 - ratio * (90 - 40));
   
-  // 半径: 远 -> 30, 近 -> 5
-  const radius = 30 - ratio * (30 - 5);
-  // 模糊度: 远 -> 25, 近 -> 5
-  const blur = 25 - ratio * (25 - 5);
+  const layers = [
+    // 高亮点图层 - 使用 ScatterplotLayer
+    // 当前定位的 POI 会被过滤掉（用 OpenLayers 五角星显示）
+    new ScatterplotLayer({
+      id: 'highlight-layer',
+      data: highlightData.value.filter(d => {
+        // 过滤掉当前定位的 POI
+        if (!currentLocatedPoi) return true;
+        const coords = currentLocatedPoi.geometry?.coordinates;
+        if (!coords) return true;
+        return Math.abs(d.lon - coords[0]) > 0.000001 || Math.abs(d.lat - coords[1]) > 0.000001;
+      }),
+      pickable: true,
+      opacity: 0.8,
+      stroked: true,
+      filled: true,
+      radiusScale: 1,
+      radiusMinPixels: 3,
+      radiusMaxPixels: 7,
+      lineWidthMinPixels: 1,
+      getPosition: d => [d.lon, d.lat],
+      getRadius: 4,
+      getFillColor: d => getColorByGroupIndex(d.groupIndex || 0),
+      getLineColor: d => {
+        const colors = [[255, 0, 0], [0, 0, 255], [128, 0, 128]];
+        return colors[d.groupIndex || 0] || colors[0];
+      },
+      updateTriggers: {
+        getFillColor: [highlightData.value, currentLocatedPoi],
+        getPosition: [highlightData.value, currentLocatedPoi],
+      },
+    }),
+    
+    // 热力图图层 - 优化参数
+    new DeckHeatmapLayer({
+      id: 'heatmap-layer',
+      data: heatmapData.value,
+      visible: heatmapEnabled.value,
+      pickable: false,
+      getPosition: d => [d.lon, d.lat],
+      getWeight: 1,
+      radiusPixels: heatmapRadius,
+      intensity: 5, // 增大强度
+      threshold: 0.01, // 降低阈值显示更多细节
+      colorRange: [
+        // 6道色卡：亮黄色 → 深红色
+        [255, 255, 178, 150],  // 亮黄色 (Fewer)
+        [254, 217, 118, 180],  // 浅黄色
+        [254, 178, 76, 200],   // 橙黄色
+        [253, 141, 60, 220],   // 橙色
+        [240, 59, 32, 240],    // 红橙色
+        [189, 0, 38, 255],     // 深红色 (More)
+      ],
+      updateTriggers: {
+        getPosition: [heatmapData.value],
+        radiusPixels: [zoom],
+      },
+    }),
+  ];
   
-  heatmapLayer.setRadius(radius);
-  heatmapLayer.setBlur(blur);
+  deckInstance.setProps({ layers });
+}
+
+/**
+ * 同步 OpenLayers 视图到 deck.gl
+ */
+function syncDeckView() {
+  if (!deckInstance || !map.value) return;
+  deckInstance.setProps({ viewState: getDeckViewState() });
+}
+
+// 动画帧 ID，用于持续同步
+let syncAnimationId = null;
+
+/**
+ * 开始持续同步视图（处理平滑动画）
+ */
+function startViewSync() {
+  const sync = () => {
+    syncDeckView();
+    updateDeckLayers();
+    syncAnimationId = requestAnimationFrame(sync);
+  };
+  sync();
 }
 
 onMounted(() => {
   // 基础底图：高德地图 XYZ 瓦片
-  // 如果 key 失效，可能需要替换或使用 OSM
   const amapKey = import.meta.env.VITE_AMAP_KEY || '2b42a2f72ef6751f2cd7c7bd24139e72';
   const gaodeUrl = `https://webrd0{1-4}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x={x}&y={y}&z={z}&key=${amapKey}`;
 
@@ -235,23 +336,64 @@ onMounted(() => {
     source: new XYZ({ url: gaodeUrl, crossOrigin: 'anonymous' })
   });
 
-  // 初始化地图
+  // 初始化 OpenLayers 地图（仅保留绘制相关图层）
   map.value = new OlMap({
     target: mapContainer.value,
-    layers: [baseLayer, polygonLayer, heatmapLayer, highlightLayer, centerLayer, hoverLayer],
+    layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, locateLayer],
     view: new View({
-      center: fromLonLat([114.307, 30.549]), // 默认中心点（武汉）
-      zoom: 13,
+      center: fromLonLat([114.307, 30.549]),
+      zoom: 14,
     }),
   });
 
-  // 绑定地图事件
-  map.value.on('moveend', onMapMoveEnd); // 移动结束
-  map.value.on('pointermove', onPointerMove); // 鼠标移动
-  map.value.on('singleclick', onMapClick); // 点击
+  // 创建 deck.gl 容器
+  deckContainer = document.createElement('div');
+  deckContainer.style.cssText = `
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+  `;
+  mapContainer.value.appendChild(deckContainer);
+
+  // 初始化 deck.gl
+  deckInstance = new Deck({
+    parent: deckContainer,
+    style: { position: 'absolute', top: 0, left: 0, pointerEvents: 'none' },
+    initialViewState: getDeckViewState(),
+    controller: false,
+    layers: [],
+    getTooltip: null,
+    pickingRadius: 8,
+  });
   
-  // 监听缩放变化以更新热力图样式
-  map.value.getView().on('change:resolution', updateHeatmapStyle);
+  // 确保 deck.gl 的 canvas 不阻挡地图拖拽
+  nextTick(() => {
+    if (deckContainer) {
+      const canvas = deckContainer.querySelector('canvas');
+      if (canvas) {
+        canvas.style.pointerEvents = 'none';
+      }
+    }
+  });
+  
+  // 交互通过 onPointerMove 和 onMapClick 中调用 deckInstance.pickObject 实现
+
+  // 绑定 OpenLayers 地图事件
+  map.value.on('moveend', onMapMoveEnd);
+  map.value.on('pointermove', onPointerMove);
+  map.value.on('singleclick', onMapClick);
+  
+  // 监听视图变化以同步 deck.gl
+  map.value.getView().on('change:resolution', syncDeckView);
+  map.value.getView().on('change:center', syncDeckView);
+  map.value.getView().on('change:rotation', syncDeckView);
+
+  // 开始持续视图同步
+  startViewSync();
 
   // 初始化 POI 特征
   rebuildPoiOlFeatures();
@@ -306,98 +448,99 @@ const emitHover = debounce((feature) => {
 
 /**
  * 地图点击处理
- * 优先检测精确点击，如果没有则进行距离检测
+ * 使用 deck.gl pickObject 检测高亮点
  */
 function onMapClick(evt) {
-  // if (evt.dragging) return; // 允许轻微移动
-  
   const pixel = map.value.getEventPixel(evt.originalEvent);
   let foundRaw = null;
   
-  // 1. 尝试标准点击检测 (Hit Detection)
+  // 1. 首先在 OpenLayers 图层中检测（悬停图层等）
   map.value.forEachFeatureAtPixel(pixel, (feature) => {
     const raw = feature.get('__raw');
     if (raw) {
       foundRaw = raw;
       return true;
     }
-  }, { 
-    // 移除特定图层过滤器，检查所有图层，只要有 __raw 属性
-    hitTolerance: 10 
-  });
+  }, { hitTolerance: 10 });
   
-  // 2. 降级方案：距离检测
-  // 如果标准检测未命中（可能是点太小或点击偏移），则搜索附近的点
-  if (!foundRaw) {
-     const view = map.value.getView();
-     const resolution = view.getResolution();
-     const clickCoord = evt.coordinate;
-     const threshold = resolution * 15; // 15像素容差（地图单位）
-     
-     let closestDist = Infinity;
-     let closestFeature = null;
-     
-     // 在高亮图层中检查可见要素
-     highlightLayerSource.forEachFeature((feat) => {
-        const geom = feat.getGeometry();
-        // 仅处理点要素
-        if (geom instanceof Point) {
-           const coord = geom.getCoordinates();
-           const dx = coord[0] - clickCoord[0];
-           const dy = coord[1] - clickCoord[1];
-           const dist = Math.sqrt(dx*dx + dy*dy);
-           if (dist < threshold && dist < closestDist) {
-              closestDist = dist;
-              closestFeature = feat;
-           }
-        }
-     });
-     
-     if (closestFeature) {
-        foundRaw = closestFeature.get('__raw');
-        console.log('[MapContainer] 通过距离检测找到要素:', closestDist);
-     }
+  // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
+  if (!foundRaw && deckInstance) {
+    const pickInfo = deckInstance.pickObject({
+      x: pixel[0],
+      y: pixel[1],
+      radius: 10,
+    });
+    if (pickInfo && pickInfo.object && pickInfo.object.raw) {
+      foundRaw = pickInfo.object.raw;
+    }
   }
   
   if (foundRaw) {
     console.log('[MapContainer] 点击了要素:', foundRaw);
     emit('click-feature', foundRaw);
-  } else {
-    console.log('[MapContainer] 点击地图但未找到要素');
   }
 }
 
 /**
  * 鼠标移动处理（悬停效果）
+ * 使用 deck.gl pickObject 检测高亮点
  */
 function onPointerMove(evt) {
   if (evt.dragging) return;
   
   const pixel = map.value.getEventPixel(evt.originalEvent);
-  
-  // 简化的悬停检测
   let hitRaw = null;
-  map.value.forEachFeatureAtPixel(pixel, (feature) => {
-     if (feature.get('__raw')) {
-        hitRaw = feature.get('__raw');
-        return true;
-     }
-  }, {
-     hitTolerance: 8
-  });
   
-  if (hitRaw) {
-    map.value.getTargetElement().style.cursor = 'pointer'; // 鼠标变手型
-    emitHover(hitRaw);
-    return;
+  // 1. 首先在 OpenLayers 图层中检测
+  map.value.forEachFeatureAtPixel(pixel, (feature) => {
+    if (feature.get('__raw')) {
+      hitRaw = feature.get('__raw');
+      return true;
+    }
+  }, { hitTolerance: 8 });
+  
+  // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
+  if (!hitRaw && deckInstance) {
+    const pickInfo = deckInstance.pickObject({
+      x: pixel[0],
+      y: pixel[1],
+      radius: 8,
+    });
+    if (pickInfo && pickInfo.object && pickInfo.object.raw) {
+      hitRaw = pickInfo.object.raw;
+    }
   }
   
-  map.value.getTargetElement().style.cursor = ''; // 恢复默认鼠标
-  emitHover(null);
+  if (hitRaw) {
+    map.value.getTargetElement().style.cursor = 'pointer';
+    emitHover(hitRaw);
+  } else {
+    map.value.getTargetElement().style.cursor = '';
+    emitHover(null);
+  }
 }
 
 onBeforeUnmount(() => {
-  if (map.value) map.value.setTarget(null); // 销毁地图实例
+  // 停止视图同步动画
+  if (syncAnimationId) {
+    cancelAnimationFrame(syncAnimationId);
+    syncAnimationId = null;
+  }
+  
+  // 销毁 deck.gl 实例
+  if (deckInstance) {
+    deckInstance.finalize();
+    deckInstance = null;
+  }
+  
+  // 移除 deck.gl 容器
+  if (deckContainer && deckContainer.parentNode) {
+    deckContainer.parentNode.removeChild(deckContainer);
+    deckContainer = null;
+  }
+  
+  // 销毁 OpenLayers 地图实例
+  if (map.value) map.value.setTarget(null);
 });
 
 // 监听 POI 数据变化，重建 OpenLayers 要素
@@ -440,24 +583,46 @@ function rebuildPoiOlFeatures() {
  * 飞行动画：定位到指定要素
  * @param {Object} feature - 要定位的要素对象
  */
+let hasLocatedOnce = false; // 标记是否已经进行过定位
+
 function flyTo(feature) {
   if (!map.value || !feature) return;
   const [lon, lat] = feature.geometry.coordinates;
   
   let center;
   if (rawToOlMap.has(feature)) {
-    // 优先使用缓存的 OL Feature 坐标（已经过投影转换）
     center = rawToOlMap.get(feature).getGeometry().getCoordinates();
   } else {
-     // 降级：直接转换坐标
      center = fromLonLat([lon, lat]);
   }
   
-  map.value.getView().animate({
+  // 记录当前定位的 POI，并刷新 deck.gl（隐藏该 POI 的红圆圈）
+  currentLocatedPoi = feature;
+  updateDeckLayers();
+  
+  // 清空悬停图层
+  hoverLayerSource.clear();
+  
+  // 显示水蓝色五角星
+  locateLayerSource.clear();
+  const locateFeature = new Feature({
+    geometry: new Point(center)
+  });
+  locateLayerSource.addFeature(locateFeature);
+  
+  // 动画参数
+  const animateOptions = {
     center: center,
     duration: 1000,
-    zoom: 16
-  });
+  };
+  
+  // 第一次定位时缩放到17级，之后不再缩放
+  if (!hasLocatedOnce) {
+    animateOptions.zoom = 17;
+    hasLocatedOnce = true;
+  }
+  
+  map.value.getView().animate(animateOptions);
 }
 
 /**
@@ -477,8 +642,7 @@ function openPolygonDraw(mode = 'Polygon') {
     // 开始绘制新图形时，清空之前的图形和标记
     polygonLayerSource.clear();
     centerLayerSource.clear();
-    heatmapSource.clear();
-    highlightLayerSource.clear();
+    clearHighlights(); // 使用 deck.gl 数据清理
     currentGeometry = null;
     currentGeometryType = null;
   });
@@ -515,7 +679,6 @@ function onCircleComplete(circleGeom, isRefresh = false) {
   const insideRaw = [];
   
   // 筛选圆内的 POI
-  // 由于 POI 和圆都在同一投影下 (EPSG:3857)，可以直接使用欧几里得距离
   for (const feat of olPoiFeatures) {
     const coord = feat.getGeometry().getCoordinates();
     const dx = coord[0] - center[0];
@@ -526,8 +689,6 @@ function onCircleComplete(circleGeom, isRefresh = false) {
       insideRaw.push(feat.get('__raw'));
     }
   }
-  
-  // 热力图数据会在 showHighlights 中自动同步更新
 
   // 计算 TagCloud 定位的中心像素点（使用圆心）
   const centerPixelObj = { 
@@ -545,11 +706,11 @@ function onCircleComplete(circleGeom, isRefresh = false) {
   showHighlights(insideRaw, { full: true });
   
   emit('polygon-completed', { 
-    polygon: null, // 圆形模式下没有多边形边界
+    polygon: null,
     center: centerPixelObj,
     selected: insideRaw,
-    type: 'Circle', // 标识模式
-    circleCenter: toLonLat(center), // 转换圆心坐标为经纬度
+    type: 'Circle',
+    circleCenter: toLonLat(center),
     circleRadius: radius
   });
 }
@@ -576,65 +737,54 @@ function closePolygonDraw() {
   });
 }
 
+/**
+ * 清空高亮数据
+ */
 function clearHighlights() {
-  highlightLayerSource.clear();
+  highlightData.value = [];
+  heatmapData.value = [];
 }
 
 /**
- * 显示高亮要素
+ * 显示高亮要素 (使用 deck.gl)
  * @param {Array} features - 要高亮的原始特征数组
  * @param {Object} options - 配置项 { full: boolean }
  */
 function showHighlights(features, options = {}) {
-  clearHighlights();
-  // 同时清空并更新热力图数据源，使热力图与高亮图层保持同步
-  heatmapSource.clear();
-  
-  if (!features || !features.length) return;
-  const full = !!options.full;
-  let subset = features;
-  // 如果数量过多且非全量模式，进行采样显示
-  if (!full && subset.length > 400) {
-    const step = Math.ceil(subset.length / 400);
-    subset = subset.filter((_, i) => i % step === 0);
+  // 清空并更新数据，deck.gl 会自动重新渲染
+  if (!features || !features.length) {
+    clearHighlights();
+    return;
   }
-  const toFeature = (raw) => {
-    if (raw instanceof Feature) return raw; // 如果已经是 OL feature
-    
-    // 尝试先从缓存获取
-    if (rawToOlMap.has(raw)) {
-      return rawToOlMap.get(raw);
+  
+  const poiCoordSys = import.meta.env.VITE_POI_COORD_SYS || 'gcj02';
+  
+  // 将原始 GeoJSON 数据转换为 deck.gl 数据格式
+  const deckData = features.map(raw => {
+    let [lon, lat] = raw.geometry.coordinates;
+    // 坐标转换
+    if (poiCoordSys.toLowerCase() === 'wgs84') {
+      [lon, lat] = wgs84ToGcj02(lon, lat);
     }
-
-    const [lon, lat] = raw.geometry.coordinates;
-    const f = new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
-    f.set('__raw', raw); // 确保绑定原始数据
-    return f;
-  };
-  const feats = subset.map(toFeature);
-  highlightLayerSource.addFeatures(feats);
+    return {
+      lon,
+      lat,
+      groupIndex: raw.properties?._groupIndex || 0,
+      raw, // 保留原始数据引用，用于交互回调
+    };
+  });
   
-  // 同步更新热力图数据源
-  // 热力图使用全量数据（features）而非采样数据（subset），以保证热力图的准确性
-  if (features.length > 0) {
-    const heatmapFeats = features.map(raw => {
-      if (rawToOlMap.has(raw)) return rawToOlMap.get(raw);
-      const [lon, lat] = raw.geometry.coordinates;
-      return new Feature({ geometry: new Point(fromLonLat([lon, lat])) });
-    });
-    heatmapSource.addFeatures(heatmapFeats);
-  }
+  // 更新高亮数据和热力图数据
+  highlightData.value = deckData;
+  heatmapData.value = deckData;
+  
+  console.log(`[MapContainer] deck.gl 数据更新: ${deckData.length} 个点`);
 }
 
-
-// 监听器
-watch(heatmapEnabled, (val) => {
-  if (heatmapLayer) {
-    heatmapLayer.setVisible(val);
-    if (val) {
-      updateHeatmapStyle();
-    }
-  }
+// 监听热力图开关
+watch(heatmapEnabled, () => {
+  // deck.gl 图层会在 updateDeckLayers 中自动根据 heatmapEnabled.value 更新可见性
+  updateDeckLayers();
 });
 
 /**
@@ -712,10 +862,12 @@ function pointInPolygonPixel(pt, ringPixels) {
 function clearPolygon() {
   polygonLayerSource.clear();
   centerLayerSource.clear();
-  highlightLayerSource.clear();
-  heatmapSource.clear();
+  locateLayerSource.clear();
+  clearHighlights();
   currentGeometry = null;
   currentGeometryType = null;
+  hasLocatedOnce = false;
+  currentLocatedPoi = null; // 清空当前定位的 POI
 }
 
 // 暴露给父组件的方法

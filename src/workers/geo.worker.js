@@ -1,6 +1,14 @@
-import * as d3 from 'd3-force';
+/**
+ * 地理感知标签云布局算法 (Geo-aware TagCloud Layout)
+ * 
+ * 核心原则：
+ * 1. 方位保持：标签必须保持在相对于中心的正确象限（东南西北）
+ * 2. 距离保持：标签距离中心的远近应反映地理距离
+ * 3. 碰撞避免：标签之间不重叠，但碰撞处理不能破坏象限约束
+ * 4. 不依赖地图视图：完全基于经纬度计算，不受拖拽/缩放影响
+ */
 
-// 如果需要，为 OffscreenCanvas 添加 Polyfill（现在 worker 中通常已有，但为了安全起见）
+// OffscreenCanvas Polyfill
 if (typeof self.document === 'undefined') {
     self.document = {
         createElement: (tagName) => {
@@ -13,72 +21,40 @@ if (typeof self.document === 'undefined') {
 }
 
 self.onmessage = event => {
-    const { tags, width, height, center, bounds, config } = event.data;
-    runGeoLayout(tags, width, height, center, bounds, config);
+    const { tags, width, height, center, config } = event.data;
+    runGeoLayout(tags, width, height, center, config);
 };
 
 /**
- * 运行地理空间布局算法
- * 核心逻辑：
- * 1. 投影：将经纬度映射到屏幕坐标，保持地理相对位置。
- * 2. 碰撞检测：使用自定义矩形碰撞算法，解决标签重叠。
- * 3. 优化：多阶段模拟（动态+静态清理），确保密集区域也能尽量展开。
- * 
- * @param {Array} tags - 标签数据数组
- * @param {number} width - 画布宽度
- * @param {number} height - 画布高度
- * @param {Array} center - [lon, lat] 指定的中心点（可选）
- * @param {Array} bounds - 地图边界（可选）
- * @param {Object} config - 配置项
+ * 主布局函数
  */
-function runGeoLayout(tags, width, height, center, bounds, config) {
+function runGeoLayout(tags, width, height, center, config) {
     if (!tags || tags.length === 0) {
         self.postMessage([]);
         return;
     }
 
-    console.log('[GeoWorker] 开始运行地理布局', { width, height, center, bounds });
+    console.log('[GeoWorker] 开始地理布局，标签数量:', tags.length);
 
-    // 1. 设置 Canvas 用于文本测量
-    // 使用 OffscreenCanvas 在 Worker 线程中测量文本宽高
+    // ============ 配置 ============
+    const fontMin = config?.fontMin || 14;
+    const fontMax = config?.fontMax || 18;
+    const minGap = 2; // 标签之间的最小间隙
+
+    // ============ 画布和测量 ============
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
-    const fontMin = config?.fontMin || 18;
-    const fontMax = config?.fontMax || 22;
+    
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const padding = 40; // 边缘留白
 
-    // 2. 注入中心标签 (Center Tag)
-    // 用户希望在视觉中心显示“中心位置”文本
-    // 我们将其视为一个特殊的固定标签，位于 (width/2, height/2)
-    const centerTag = {
-        name: '中心位置',
-        isCenter: true,
-        x: width / 2,
-        y: height / 2,
-        fx: width / 2, // D3 中固定位置
-        fy: height / 2,
-        fontSize: fontMax + 4, // 稍微大一点
-        weight: 100, // 最粗
-        originalIndex: -1, // 特殊索引
-        // 中心标签大概尺寸
-        width: 80, 
-        height: 30
-    };
-    ctx.font = `900 ${centerTag.fontSize}px sans-serif`;
-    centerTag.width = Math.ceil(ctx.measureText(centerTag.name).width);
-    centerTag.height = Math.ceil(centerTag.fontSize * 1.2);
-    
-    // 3. 预处理标签 (测量尺寸 & 计算地理目标位置)
-    // 我们需要将 (lon, lat) 映射到 (x, y)
-    // 使用基于过滤后 POI 边界的简单线性投影
-    // 为了保持相对方向，我们基于最大维度偏差进行缩放
-    
-    // 确定中心点和缩放比例
-    // 如果提供了 center (圆形模式)，使用它。
+    // ============ 确定地理中心 ============
     let centerLon, centerLat;
     if (center && Array.isArray(center) && center.length === 2) {
         [centerLon, centerLat] = center;
     } else {
-        // 如果未提供中心点，则计算标签的质心
+        // 计算质心
         let sumLon = 0, sumLat = 0, count = 0;
         tags.forEach(t => {
             if (t.lon !== undefined && t.lat !== undefined) {
@@ -87,73 +63,94 @@ function runGeoLayout(tags, width, height, center, bounds, config) {
                 count++;
             }
         });
-        if (count > 0) {
-            centerLon = sumLon / count;
-            centerLat = sumLat / count;
-        } else {
-            centerLon = 0; centerLat = 0;
-        }
+        centerLon = count > 0 ? sumLon / count : 0;
+        centerLat = count > 0 ? sumLat / count : 0;
     }
 
-    const padding = 60; // 标签边缘的额外内边距
-    const availWidth = width - padding * 2;
-    const availHeight = height - padding * 2;
+    // ============ 创建中心标签 ============
+    const centerTag = {
+        name: '中心位置',
+        isCenter: true,
+        x: centerX,
+        y: centerY,
+        fontSize: fontMax + 4,
+        originalIndex: -1,
+        quadrant: 0, // 中心不属于任何象限
+        geoAngle: 0,
+        geoDistance: 0
+    };
+    ctx.font = `900 ${centerTag.fontSize}px sans-serif`;
+    centerTag.width = Math.ceil(ctx.measureText(centerTag.name).width);
+    centerTag.height = Math.ceil(centerTag.fontSize * 1.2);
+
+    // ============ 预处理标签 ============
+    // 计算每个标签的：地理角度、地理距离、目标象限
     
-    // 计算最大增量以确定缩放比例
-    let maxDx = 0;
-    let maxDy = 0;
-    
-    // 经度校正因子 (近似米制比例)
-    // 我们希望保持角度，所以需要考虑经度度数比纬度度数短的问题
-    // factorX = cos(纬度)，用于收缩经度差值
+    // 经度校正因子（1度经度的实际距离随纬度变化）
     const latRad = centerLat * Math.PI / 180;
-    const factorX = Math.cos(latRad); 
-    const factorY = 1;
+    const lonFactor = Math.cos(latRad);
 
-    tags.forEach(t => {
-        if (t.lon !== undefined && t.lat !== undefined) {
-            const dx = Math.abs((t.lon - centerLon) * factorX);
-            const dy = Math.abs((t.lat - centerLat) * factorY);
-            if (dx > maxDx) maxDx = dx;
-            if (dy > maxDy) maxDy = dy;
+    // 计算最大地理距离（用于归一化）
+    let maxGeoDistance = 0;
+    const tagsWithGeo = tags.map((tag, index) => {
+        if (tag.lon === undefined || tag.lat === undefined) {
+            return { ...tag, geoDistance: 0, geoAngle: 0, quadrant: 1 };
         }
-    });
-    
-    // 避免除以零
-    if (maxDx === 0) maxDx = 0.001;
-    if (maxDy === 0) maxDy = 0.001;
-    
-    // 统一缩放比例 (Uniform Scale)
-    // 取宽和高缩放的较小值，确保地图不会变形
-    const scale = Math.min(availWidth / 2 / maxDx, availHeight / 2 / maxDy);
-
-    const processedTags = tags.map((tag, i) => {
-        // 尺寸计算
-        const normalizedIndex = i / Math.max(1, tags.length - 1);
-        const sizeRatio = 1 - Math.pow(normalizedIndex, 0.5); // 排名靠前的标签更大
-        const fontSize = fontMin + sizeRatio * (fontMax - fontMin);
-
-        ctx.font = `${fontSize}px sans-serif`;
-        const metrics = ctx.measureText(tag.name);
-        const textWidth = Math.ceil(metrics.width);
-        const textHeight = Math.ceil(fontSize * 1.2);
-
-        // 目标位置 (Target Position)
-        let targetX = width / 2;
-        let targetY = height / 2;
         
-        if (tag.lon !== undefined && tag.lat !== undefined) {
-            // 相对于中心的映射
-            const dx = (tag.lon - centerLon) * factorX;
-            const dy = (tag.lat - centerLat) * factorY;
-            
-            targetX = width / 2 + dx * scale;
-            targetY = height / 2 - dy * scale; // Y 轴反转，因为屏幕 Y 向下，纬度向上
-        }
+        // 地理偏移（转换为近似米制比例）
+        const dLon = (tag.lon - centerLon) * lonFactor;
+        const dLat = tag.lat - centerLat;
+        
+        // 地理距离
+        const geoDistance = Math.sqrt(dLon * dLon + dLat * dLat);
+        if (geoDistance > maxGeoDistance) maxGeoDistance = geoDistance;
+        
+        // 地理角度（-PI 到 PI，0 为正东，逆时针为正）
+        const geoAngle = Math.atan2(dLat, dLon);
+        
+        // 确定象限（1-4，对应数学象限定义）
+        // 第一象限：x>0, y>0 (东北)
+        // 第二象限：x<0, y>0 (西北)
+        // 第三象限：x<0, y<0 (西南)
+        // 第四象限：x>0, y<0 (东南)
+        let quadrant;
+        if (dLon >= 0 && dLat >= 0) quadrant = 1;      // 东北 → 屏幕右上
+        else if (dLon < 0 && dLat >= 0) quadrant = 2;  // 西北 → 屏幕左上
+        else if (dLon < 0 && dLat < 0) quadrant = 3;   // 西南 → 屏幕左下
+        else quadrant = 4;                              // 东南 → 屏幕右下
+        
+        return {
+            ...tag,
+            geoDistance,
+            geoAngle,
+            quadrant,
+            dLon,
+            dLat,
+            originalIndex: index
+        };
+    });
 
-        // 初始位置增加微小随机抖动，防止完全重叠的点卡死
-        const jitter = (Math.random() - 0.5) * 2; 
+    if (maxGeoDistance === 0) maxGeoDistance = 1;
 
+    // ============ 计算目标位置并测量尺寸 ============
+    const availableRadius = Math.min(width, height) / 2 - padding;
+    
+    const processedTags = tagsWithGeo.map((tag, i) => {
+        // 字体大小（距离近的稍大）
+        const distanceRatio = 1 - (tag.geoDistance / maxGeoDistance);
+        const fontSize = fontMin + distanceRatio * (fontMax - fontMin) * 0.3;
+        
+        ctx.font = `${fontSize}px sans-serif`;
+        const textWidth = Math.ceil(ctx.measureText(tag.name).width);
+        const textHeight = Math.ceil(fontSize * 1.2);
+        
+        // 目标位置：基于地理角度和距离
+        const normalizedDistance = (tag.geoDistance / maxGeoDistance) * availableRadius * 0.9;
+        
+        // 屏幕坐标（注意 Y 轴反转：纬度增加 → 屏幕 Y 减少）
+        const targetX = centerX + normalizedDistance * Math.cos(tag.geoAngle);
+        const targetY = centerY - normalizedDistance * Math.sin(tag.geoAngle); // Y 反转
+        
         return {
             ...tag,
             fontSize,
@@ -161,152 +158,191 @@ function runGeoLayout(tags, width, height, center, bounds, config) {
             height: textHeight,
             targetX,
             targetY,
-            x: targetX + jitter, // 初始位置在目标附近
-            y: targetY + jitter,
-            vx: 0,
-            vy: 0
+            x: targetX,
+            y: targetY,
+            placed: false
         };
     });
 
-    // 合并中心标签
-    const allNodes = [centerTag, ...processedTags];
+    // ============ 按距离排序（先放中心附近的） ============
+    processedTags.sort((a, b) => a.geoDistance - b.geoDistance);
 
-    // 4. D3 力导向模拟 (Force Simulation)
-    // 使用自定义矩形碰撞检测以获得更紧凑的布局
-    const simulation = d3.forceSimulation(allNodes)
-        .force('x', d3.forceX(d => d.isCenter ? width/2 : d.targetX).strength(0.2)) // 增强引力以保持地理位置
-        .force('y', d3.forceY(d => d.isCenter ? height/2 : d.targetY).strength(0.2))
-        .alphaDecay(0.05) // 加快衰减，尽快稳定
-        .stop();
+    // ============ 碰撞检测与避让算法 ============
+    // 已放置的标签列表（初始包含中心标签）
+    const placedTags = [centerTag];
+    const failedTags = [];
 
-    // 自定义象限约束力 (Quadrant Constraint Force)
-    // 强制标签尽量保持在相对于中心的正确地理象限内
-    const forceQuadrant = (alpha) => {
-        const k = alpha * 0.5; // 力度系数
-        for (const d of allNodes) {
-            if (d.isCenter) continue;
+    for (const tag of processedTags) {
+        const position = findValidPosition(tag, placedTags, centerX, centerY, minGap, width, height, padding);
+        
+        if (position) {
+            tag.x = position.x;
+            tag.y = position.y;
+            tag.placed = true;
+            placedTags.push(tag);
+        } else {
+            // 放置失败，尝试缩小字体重试
+            tag.fontSize = fontMin * 0.8;
+            ctx.font = `${tag.fontSize}px sans-serif`;
+            tag.width = Math.ceil(ctx.measureText(tag.name).width);
+            tag.height = Math.ceil(tag.fontSize * 1.2);
             
-            // 判断地理方向
-            const isEast = (d.lon - centerLon) > 0;
-            const isNorth = (d.lat - centerLat) > 0;
-
-            // 屏幕中心
-            const cx = width / 2;
-            const cy = height / 2;
-
-            // X轴约束 (东 -> 右, 西 -> 左)
-            if (isEast && d.x < cx) {
-                d.vx += (cx - d.x) * k;
-            } else if (!isEast && d.x > cx) {
-                d.vx += (cx - d.x) * k;
+            const retryPosition = findValidPosition(tag, placedTags, centerX, centerY, minGap, width, height, padding);
+            if (retryPosition) {
+                tag.x = retryPosition.x;
+                tag.y = retryPosition.y;
+                tag.placed = true;
+                placedTags.push(tag);
+            } else {
+                failedTags.push(tag);
             }
-
-            // Y轴约束 (北 -> 上, 南 -> 下)
-            // 注意屏幕坐标 Y 向下增加，所以北(lat>0)应该对应 Y < cy
-            if (isNorth && d.y > cy) {
-                d.vy += (cy - d.y) * k;
-            } else if (!isNorth && d.y < cy) {
-                d.vy += (cy - d.y) * k;
-            }
-        }
-    };
-
-    // 自定义矩形碰撞检测 (Custom Rectangular Collision)
-    const rectCollide = (alpha) => {
-        const nodes = allNodes;
-        const strength = 1; 
-        const iterations = 2; // 单次调用的迭代次数，外部循环会多次调用
-        const padding = 1; // 最小化间隙的同时保持紧凑
-
-        for (let k = 0; k < iterations; k++) {
-            for (let i = 0; i < nodes.length; i++) {
-                const a = nodes[i];
-                for (let j = i + 1; j < nodes.length; j++) {
-                    const b = nodes[j];
-                    
-                    const aw = a.width / 2 + padding;
-                    const ah = a.height / 2 + padding;
-                    const bw = b.width / 2 + padding;
-                    const bh = b.height / 2 + padding;
-                    
-                    const dx = b.x - a.x;
-                    const dy = b.y - a.y;
-                    const absDx = Math.abs(dx);
-                    const absDy = Math.abs(dy);
-                    
-                    const ox = (aw + bw) - absDx;
-                    const oy = (ah + bh) - absDy;
-                    
-                    if (ox > 0 && oy > 0) {
-                        if (ox < oy) {
-                            const moveX = ox * strength;
-                            const sign = dx > 0 ? 1 : -1;
-                            
-                            if (a.fx !== undefined) {
-                                b.x += sign * moveX;
-                                b.vx += sign * moveX * 0.5;
-                            } else if (b.fx !== undefined) {
-                                a.x -= sign * moveX;
-                                a.vx -= sign * moveX * 0.5;
-                            } else {
-                                a.x -= sign * moveX * 0.5;
-                                b.x += sign * moveX * 0.5;
-                                a.vx -= sign * moveX * 0.5;
-                                b.vx += sign * moveX * 0.5;
-                            }
-                        } else {
-                            const moveY = oy * strength;
-                            const sign = dy > 0 ? 1 : -1;
-                            
-                            if (a.fx !== undefined) {
-                                b.y += sign * moveY;
-                                b.vy += sign * moveY * 0.5;
-                            } else if (b.fx !== undefined) {
-                                a.y -= sign * moveY;
-                                a.vy -= sign * moveY * 0.5;
-                            } else {
-                                a.y -= sign * moveY * 0.5;
-                                b.y += sign * moveY * 0.5;
-                                a.vy -= sign * moveY * 0.5;
-                                b.vy += sign * moveY * 0.5;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    // 运行多阶段模拟
-    // 阶段 1: 动态模拟 (Dynamic Simulation)
-    const simSteps = 300;
-    const iterationsPerTick = 3; // 每帧运行多次碰撞检测
-
-    for (let i = 0; i < simSteps; ++i) {
-        simulation.tick();
-        const alpha = simulation.alpha();
-        forceQuadrant(alpha); // 应用象限约束
-        for (let k = 0; k < iterationsPerTick; k++) {
-            rectCollide(alpha);
         }
     }
 
-    // 阶段 2: 静态清理 (Static Cleanup)
-    // 关闭引力，仅运行碰撞检测以消除残余重叠
-    const cleanupSteps = 120;
-    for (let i = 0; i < cleanupSteps; ++i) {
-        for (let k = 0; k < iterationsPerTick; k++) {
-            rectCollide(0);
-        }
-    }
+    console.log('[GeoWorker] 布局完成，成功:', placedTags.length - 1, '失败:', failedTags.length);
 
-    // 6. 返回结果
-    const results = allNodes.map(d => ({
-        ...d,
-        text: d.name, // 确保 text 属性存在
-        rotation: 0,   // 此模式下不旋转
-        placed: true
-    }));
+    // ============ 最终验证：确保象限正确 ============
+    const results = placedTags.map(d => {
+        // 验证象限（跳过中心标签）
+        if (!d.isCenter && d.quadrant) {
+            const isCorrectQuadrant = verifyQuadrant(d.x, d.y, centerX, centerY, d.quadrant);
+            if (!isCorrectQuadrant) {
+                console.warn('[GeoWorker] 象限错误，强制修正:', d.name);
+                // 强制修正到正确象限
+                const corrected = forceCorrectQuadrant(d, centerX, centerY);
+                d.x = corrected.x;
+                d.y = corrected.y;
+            }
+        }
+        
+        return {
+            ...d,
+            text: d.name,
+            rotation: 0,
+            placed: d.placed !== false
+        };
+    });
 
     self.postMessage(results);
+}
+
+/**
+ * 寻找有效位置：保持象限约束的螺旋搜索
+ */
+function findValidPosition(tag, placedTags, cx, cy, minGap, canvasWidth, canvasHeight, padding) {
+    const maxAttempts = 500;
+    const spiralStep = 3; // 每步移动的像素
+    
+    // 从目标位置开始螺旋搜索
+    let theta = 0;
+    let attempt = 0;
+    
+    while (attempt < maxAttempts) {
+        // 螺旋轨迹
+        const r = spiralStep * theta / (2 * Math.PI);
+        const offsetX = r * Math.cos(theta);
+        const offsetY = r * Math.sin(theta);
+        
+        const testX = tag.targetX + offsetX;
+        const testY = tag.targetY + offsetY;
+        
+        // 检查是否在正确象限
+        if (!verifyQuadrant(testX, testY, cx, cy, tag.quadrant)) {
+            theta += 0.3;
+            attempt++;
+            continue;
+        }
+        
+        // 检查是否在画布范围内
+        const halfW = tag.width / 2;
+        const halfH = tag.height / 2;
+        if (testX - halfW < padding || testX + halfW > canvasWidth - padding ||
+            testY - halfH < padding || testY + halfH > canvasHeight - padding) {
+            theta += 0.3;
+            attempt++;
+            continue;
+        }
+        
+        // 检查碰撞
+        if (!hasCollision(testX, testY, tag.width, tag.height, placedTags, minGap)) {
+            return { x: testX, y: testY };
+        }
+        
+        theta += 0.3;
+        attempt++;
+    }
+    
+    return null; // 未找到有效位置
+}
+
+/**
+ * 验证位置是否在正确象限
+ */
+function verifyQuadrant(x, y, cx, cy, targetQuadrant) {
+    // 屏幕坐标系：Y 向下为正
+    // 地理坐标系：纬度向上为正
+    // 转换：屏幕 Y < cy 对应地理北方
+    
+    const isRight = x >= cx;  // 东
+    const isUp = y <= cy;     // 北（屏幕 Y 反转）
+    
+    switch (targetQuadrant) {
+        case 1: return isRight && isUp;    // 东北 → 右上
+        case 2: return !isRight && isUp;   // 西北 → 左上
+        case 3: return !isRight && !isUp;  // 西南 → 左下
+        case 4: return isRight && !isUp;   // 东南 → 右下
+        default: return true;
+    }
+}
+
+/**
+ * 强制修正到正确象限
+ */
+function forceCorrectQuadrant(tag, cx, cy) {
+    let x = tag.x;
+    let y = tag.y;
+    const offset = 5; // 最小偏移
+    
+    switch (tag.quadrant) {
+        case 1: // 东北 → 右上
+            if (x < cx) x = cx + offset;
+            if (y > cy) y = cy - offset;
+            break;
+        case 2: // 西北 → 左上
+            if (x >= cx) x = cx - offset;
+            if (y > cy) y = cy - offset;
+            break;
+        case 3: // 西南 → 左下
+            if (x >= cx) x = cx - offset;
+            if (y <= cy) y = cy + offset;
+            break;
+        case 4: // 东南 → 右下
+            if (x < cx) x = cx + offset;
+            if (y <= cy) y = cy + offset;
+            break;
+    }
+    
+    return { x, y };
+}
+
+/**
+ * 碰撞检测（矩形 AABB）
+ */
+function hasCollision(x, y, w, h, placedTags, gap) {
+    const halfW = w / 2 + gap;
+    const halfH = h / 2 + gap;
+    
+    for (const other of placedTags) {
+        const otherHalfW = other.width / 2;
+        const otherHalfH = other.height / 2;
+        
+        const dx = Math.abs(x - other.x);
+        const dy = Math.abs(y - other.y);
+        
+        if (dx < halfW + otherHalfW && dy < halfH + otherHalfH) {
+            return true; // 有碰撞
+        }
+    }
+    
+    return false;
 }

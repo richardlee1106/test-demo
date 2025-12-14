@@ -68,6 +68,7 @@
                     :spiralConfig="spiralConfig" 
                     :boundaryPolygon="selectedPolygon"
                     :hovered-feature-id="hoveredFeatureId"
+                    :clicked-feature-id="clickedFeatureId"
                     :draw-mode="selectedDrawMode"
                     :circle-center="circleCenterGeo"
                     @hover-feature="handleFeatureHover"
@@ -105,7 +106,8 @@ const polygonCenter = ref(null); // 选中多边形的中心点（屏幕像素�
 const selectedPolygon = ref(null); // 选中多边形的经纬度坐标数组
 
 // 交互状态
-const hoveredFeatureId = ref(null); // 当前悬停的要素 ID（用于联动高亮）
+const hoveredFeatureId = ref(null); // 当前悬停的要素（用于联动高亮）
+const clickedFeatureId = ref(null); // 当前点击的要素（常亮状态）
 const filterEnabled = ref(false); // 是否开启实时视野过滤
 const mapBounds = ref(null); // 当前地图视野边界 [minLon, minLat, maxLon, maxLat]
 
@@ -373,28 +375,28 @@ const handleFeatureHover = (id) => {
 
 /**
  * 处理要素点击
- * 当在地图上点击要素时，TagCloud 自动定位并高亮该标签
+ * 当在地图上点击要素时，对应标签橙色常亮（无定位动画）
  * @param {Object} feature - 被点击的要素对象
  */
 const handleFeatureClick = (feature) => {
-    console.log('[App] 处理要素点击:', feature);
-    // 1. 更新高亮状态
-    hoveredFeatureId.value = feature;
-    
-    // 2. 通知 TagCloud 组件定位到该标签
-      if (tagCloudRef.value) {
-        tagCloudRef.value.centerOnFeature(feature);
-      }
-    };
+  console.log('[App] 处理要素点击:', feature);
+  // 设置点击状态（常亮），不受悬浮状态影响
+  clickedFeatureId.value = feature;
+};
 
 /**
  * 处理要素定位请求
- * 当在 TagCloud 点击标签时，地图自动飞向该 POI
+ * 当在 TagCloud 点击标签时，只有地图飞向该 POI
  * @param {Object} feature - 目标要素对象
  */
 const handleFeatureLocate = (feature) => {
+  console.log('[App] 定位到地图要素');
+  
+  // 1. 更新高亮状态（橙色高亮）
+  hoveredFeatureId.value = feature;
+  
+  // 2. 地图飞向该 POI（TagCloud 不动）
   if (mapComponent.value) {
-    console.log('[App] 定位到地图要素');
     mapComponent.value.flyTo(feature);
   }
 };

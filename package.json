@@ -9,6 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.2.5",
+    "@deck.gl/core": "^9.2.5",
+    "@deck.gl/layers": "^9.2.5",
+    "@deck.gl/mesh-layers": "^9.2.5",
+    "@luma.gl/core": "^9.2.5",
+    "@luma.gl/webgl": "^9.2.5",
     "@types/d3": "^7.4.3",
     "axios": "^1.13.2",
     "d3": "^7.9.0",

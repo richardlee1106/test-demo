@@ -51,7 +51,8 @@ const props = defineProps({
   polygonCenter: Object, // 多边形中心点（用于螺旋布局）
   spiralConfig: Object, // 螺旋布局配置
   boundaryPolygon: Array, // 边界多边形顶点
-  hoveredFeatureId: Object, // 当前被高亮的 Feature 对象（来自地图交互）
+  hoveredFeatureId: Object, // 当前悬浮的 Feature 对象
+  clickedFeatureId: Object, // 当前点击的 Feature 对象（常亮）
   drawMode: String, // 当前绘制模式 ('Circle' | 'Polygon' | 'None')
   circleCenter: Array, // 圆形绘制模式下的圆心坐标 [lon, lat]
 });
@@ -71,6 +72,7 @@ const RESIZE_DEBOUNCE_MS = 120; // 窗口大小调整防抖时间
 const MIN_SCALE = 0.2; // 最小缩放比例
 const MAX_SCALE = 5; // 最大缩放比例
 let currentTransform = d3.zoomIdentity; // 当前缩放变换状态
+let cachedLayoutTags = []; // 缓存布局后的标签数据，用于快速查找
 
 /**
  * 初始化 Web Worker
@@ -97,125 +99,132 @@ function initWorker() {
   // 当 Worker 计算完成并返回布局后的标签数据时触发
   worker.onmessage = event => {
     const tags = event.data;
-    console.log('[TagCloud] 收到来自 Worker 的标签数据:', tags);
-
-    const svg = d3.select(tagCloudContainer.value).select('svg');
-    const root = svg.select('g.main-group');
-    rootGroupRef = root; // 更新引用，用于后续的高亮操作
-    const zoomGroup = svg.select('g.zoom-group');
-
-    if (svg.empty() || root.empty() || zoomGroup.empty()) {
-      console.error('[TagCloud] 错误: 在 worker.onmessage 期间未找到 SVG、主组或缩放组。');
-      return;
-    }
-
-    // 使用 D3 的数据绑定机制 (Join pattern) 更新 DOM
-    // key 函数使用 name-originalIndex 确保唯一性，避免复用错误的 DOM 元素
-    const texts = root
-      .selectAll('text')
-      .data(tags, (d) => (d.name ? `${d.name}-${d.originalIndex}` : `${d.originalIndex}`));
-
-    // 处理进入、更新和退出选择集
-    texts.join(
-      // Enter: 处理新添加的节点
-      enter => enter.append('text')
-        .attr('text-anchor', 'middle') // 文本居中对齐
-        .text(d => d.name)
-        .attr('dy', '.35em') // 垂直居中微调
-        // 根据密度计算字体大小，如果 worker 未返回 fontSize 则使用默认插值
-        .style('font-size', d => `${(d.fontSize || (8 + (1 - d.normalizedDensity) * (24 - 8)))}px`)
-        .style('fill', d => {
-           if (d.isCenter) return '#FFA500'; // 中心标签显示为橙色
-           return d.selected ? '#d23' : '#bfeaf1'; // 选中为红色，普通为淡蓝色
-        })
-        .style('font-weight', d => d.isCenter ? '900' : (d.selected ? '700' : '400'))
-        .style('cursor', 'pointer') // 添加手型光标
-        // 初始位置和旋转
-        .attr('transform', d => `translate(${d.x}, ${d.y}) rotate(${d.rotation || 0})`)
-        // 交互事件监听
-        .on('mouseover', (event, d) => {
-           if (d.isCenter) return; // 忽略中心标签
-           const feature = props.data[d.originalIndex];
-           emit('hover-feature', feature); // 触发悬停事件，通知父组件
-        })
-        .on('mouseout', (event, d) => {
-           if (d.isCenter) return;
-           emit('hover-feature', null); // 鼠标移出，清除悬停状态
-        })
-        .on('click', (event, d) => {
-           event.stopPropagation();
-           if (d.isCenter) return;
-           const feature = props.data[d.originalIndex];
-           emit('locate-feature', feature); // 触发定位事件
-        }),
-      // Update: 处理现有节点的更新（如位置变化）
-      update => update
-        .transition().duration(250) // 添加平滑过渡动画
-        .style('font-size', d => `${(d.fontSize || (8 + (1 - d.normalizedDensity) * (24 - 8)))}px`)
-        .style('fill', d => {
-           if (d.isCenter) return '#FFA500';
-           return d.selected ? '#d23' : '#bfeaf1';
-        })
-        .style('font-weight', d => d.isCenter ? '900' : (d.selected ? '700' : '400'))
-        .attr('transform', d => `translate(${d.x}, ${d.y}) rotate(${d.rotation || 0})`)
-        ,
-      // Exit: 处理删除的节点
-      exit => exit.remove()
-    );
+    console.log('[TagCloud] 收到来自 Worker 的标签数据:', tags.length);
     
-    // 应用当前的高亮状态（如果存在）
-    if (props.hoveredFeatureId) {
-      updateHighlight(props.hoveredFeatureId);
-    }
+    // 缓存布局数据，用于 centerOnFeature 快速查找
+    cachedLayoutTags = tags;
+
+    // 使用 requestAnimationFrame 优化渲染
+    requestAnimationFrame(() => {
+      const svg = d3.select(tagCloudContainer.value).select('svg');
+      const root = svg.select('g.main-group');
+      rootGroupRef = root;
+      const zoomGroup = svg.select('g.zoom-group');
+
+      if (svg.empty() || root.empty() || zoomGroup.empty()) {
+        console.error('[TagCloud] 错误: 未找到 SVG 元素');
+        return;
+      }
+
+      // 性能优化：标签过多时禁用过渡动画
+      const useTransition = tags.length < 500;
+      const transitionDuration = useTransition ? 200 : 0;
+
+      // 使用 D3 的数据绑定机制
+      // 使用更唯一的 key：名称 + 坐标（避免搜索过滤后 key 冲突）
+      const texts = root
+        .selectAll('text')
+        .data(tags, d => `${d.name}-${d.lon?.toFixed(6)}-${d.lat?.toFixed(6)}`);
+
+      // 预计算样式值，减少函数调用
+      const getFontSize = d => `${d.fontSize || 16}px`;
+      const getFill = d => d.isCenter ? '#FFA500' : (d.selected ? '#d23' : '#bfeaf1');
+      const getFontWeight = d => d.isCenter ? '900' : (d.selected ? '700' : '400');
+      const getTransform = d => `translate(${d.x},${d.y})${d.rotation ? ` rotate(${d.rotation})` : ''}`;
+
+      // Enter + Update 合并处理
+      texts.join(
+        enter => enter.append('text')
+          .attr('text-anchor', 'middle')
+          .attr('dy', '.35em')
+          .style('cursor', 'pointer')
+          .text(d => d.name)
+          .style('font-size', getFontSize)
+          .style('fill', getFill)
+          .style('font-weight', getFontWeight)
+          .attr('transform', getTransform)
+          .on('mouseover', (event, d) => {
+            if (d.isCenter) return;
+            emit('hover-feature', props.data[d.originalIndex]);
+          })
+          .on('mouseout', () => emit('hover-feature', null))
+          .on('click', (event, d) => {
+            event.stopPropagation();
+            if (d.isCenter) return;
+            emit('locate-feature', props.data[d.originalIndex]);
+          }),
+        update => {
+          // 性能优化：根据数量决定是否使用动画
+          const u = useTransition ? update.transition().duration(transitionDuration) : update;
+          return u
+            .text(d => d.name) // 确保名称也更新
+            .style('font-size', getFontSize)
+            .style('fill', getFill)
+            .style('font-weight', getFontWeight)
+            .attr('transform', getTransform);
+        },
+        exit => exit.remove()
+      );
+
+      // 应用高亮状态（悬浮和点击）
+      if (props.hoveredFeatureId || props.clickedFeatureId) {
+        updateHighlight();
+      }
+    });
   };
 }
 
 /**
- * 更新标签的高亮样式
- * 当地图上的 POI 被悬停时，对应的高亮右侧标签云中的文字
- * @param {Object} hoveredFeature - 当前悬停的地理要素对象
+ * 更新标签的高亮样式（性能优化版）
+ * 同时考虑悬浮和点击状态，点击状态优先级更高（常亮）
  */
-function updateHighlight(hoveredFeature) {
+function updateHighlight() {
   if (!rootGroupRef || rootGroupRef.empty()) return;
   
+  // 使用缓存的布局数据快速查找匹配的标签索引
+  const findMatchingIndex = (feature) => {
+    if (!feature) return -1;
+    const coords = feature.geometry?.coordinates;
+    if (!coords) return -1;
+    
+    // 在缓存的布局数据中查找
+    for (const tag of cachedLayoutTags) {
+      if (tag.lon !== undefined && tag.lat !== undefined) {
+        if (Math.abs(tag.lon - coords[0]) < 0.0001 && 
+            Math.abs(tag.lat - coords[1]) < 0.0001) {
+          return tag.originalIndex;
+        }
+      }
+    }
+    return -1;
+  };
+  
+  // 悬浮和点击的索引
+  const hoveredIndex = findMatchingIndex(props.hoveredFeatureId);
+  const clickedIndex = findMatchingIndex(props.clickedFeatureId);
+  
+  // 直接更新样式，不使用过渡动画
   rootGroupRef.selectAll('text')
-    .transition().duration(200)
     .style('fill', d => {
       if (d.isCenter) return '#FFA500';
-      if (!props.data || !props.data[d.originalIndex]) return d.selected ? '#d23' : '#bfeaf1';
-      const feature = props.data[d.originalIndex];
-      // 鲁棒的匹配策略：先比较引用，再比较名称和坐标
-      let isHovered = feature === hoveredFeature;
-      if (!isHovered && feature && hoveredFeature) {
-         const getName = (f) => f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
-         const n1 = getName(feature);
-         const n2 = getName(hoveredFeature);
-         if (n1 && n2 && n1 === n2) {
-            const c1 = feature.geometry?.coordinates;
-            const c2 = hoveredFeature.geometry?.coordinates;
-            if (c1 && c2) {
-               // 坐标浮点数比较，使用极小值 epsilon
-               const dx = Math.abs(c1[0] - c2[0]);
-               const dy = Math.abs(c1[1] - c2[1]);
-               if (dx < 0.000001 && dy < 0.000001) isHovered = true;
-            }
-         }
+      // 点击状态优先（常亮），然后是悬浮状态
+      if (d.originalIndex === clickedIndex || d.originalIndex === hoveredIndex) {
+        return 'orange';
       }
-      return isHovered ? 'orange' : (d.selected ? '#d23' : '#bfeaf1');
+      return d.selected ? '#d23' : '#bfeaf1';
     })
     .style('font-weight', d => {
       if (d.isCenter) return '900';
-      if (!props.data || !props.data[d.originalIndex]) return d.selected ? '700' : '400';
-      const feature = props.data[d.originalIndex];
-      const isHovered = feature === hoveredFeature;
-      return isHovered ? 'bold' : (d.selected ? '700' : '400');
+      if (d.originalIndex === clickedIndex || d.originalIndex === hoveredIndex) {
+        return 'bold';
+      }
+      return d.selected ? '700' : '400';
     });
 }
 
-// 监听 props.hoveredFeatureId 变化，实时更新高亮
-watch(() => props.hoveredFeatureId, (newVal) => {
-  updateHighlight(newVal);
-});
+// 监听悬浮和点击状态变化
+watch(() => props.hoveredFeatureId, () => updateHighlight(), { flush: 'sync' });
+watch(() => props.clickedFeatureId, () => updateHighlight(), { flush: 'sync' });
 
 /**
  * 主布局函数：准备数据并发送给 Worker
@@ -250,13 +259,25 @@ const runLayout = (algorithm) => {
      .attr('height', height)
      .style('background-color', 'rgba(255, 255, 255, 0.1)'); // 调试用背景色
 
-  // 设置缩放行为 (Zoom Behavior)
+  // 设置缩放行为 (Zoom Behavior) - 性能优化版
   if (!zoomBehavior) {
+    let lastZoomTime = 0;
+    const ZOOM_THROTTLE = 16; // 约 60fps
+    
     zoomBehavior = d3.zoom()
-      .scaleExtent([MIN_SCALE, MAX_SCALE]) // 设置缩放范围
+      .scaleExtent([MIN_SCALE, MAX_SCALE])
+      .filter((event) => {
+        // 过滤掉不需要的事件，提高性能
+        return !event.ctrlKey && !event.button;
+      })
       .on('zoom', (event) => {
+        // 节流处理，减少重绘次数
+        const now = performance.now();
+        if (now - lastZoomTime < ZOOM_THROTTLE) return;
+        lastZoomTime = now;
+        
         currentTransform = event.transform;
-        zoomGroup.attr('transform', currentTransform); // 应用变换
+        zoomGroup.attr('transform', currentTransform);
       });
   }
 
@@ -475,69 +496,45 @@ const resetZoom = () => {
 };
 
 /**
- * 定位到指定要素 (Center On Feature)
- * 当用户在地图上点击某个 POI 时，标签云视图会自动缩放并定位到对应的标签
+ * 定位到指定要素 (Center On Feature) - 性能优化版
  * @param {Object} feature - 目标地理要素
  */
 const centerOnFeature = (feature) => {
-  if (!feature || !rootGroupRef || rootGroupRef.empty() || !svgRef) {
-    console.warn('[TagCloud] centerOnFeature: 缺少 feature 或 D3 引用');
-    return;
-  }
+  if (!feature || !svgRef || !zoomBehavior) return;
 
-  console.log('[TagCloud] centerOnFeature 被调用，目标:', feature.properties?.name || feature.id);
-
-  // 查找对应的标签数据
-  let targetD = null;
+  // 使用坐标快速查找（O(n) 但不遍历 DOM）
+  const targetCoords = feature.geometry?.coordinates;
+  if (!targetCoords) return;
   
-  // 遍历所有文本节点寻找匹配项
-  rootGroupRef.selectAll('text').each(function(d) {
-    const feat = props.data[d.originalIndex];
-    if (feat === feature) {
-      targetD = d;
-    } else if (feat && feature) {
-      // 辅助函数获取名称
-      const getName = (f) => f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
-      const name1 = getName(feat);
-      const name2 = getName(feature);
-      
-      if (name1 && name2 && name1 === name2) {
-         // 二次检查坐标，使用 epsilon
-         const c1 = feat.geometry?.coordinates;
-         const c2 = feature.geometry?.coordinates;
-         if (c1 && c2) {
-            const dx = Math.abs(c1[0] - c2[0]);
-            const dy = Math.abs(c1[1] - c2[1]);
-            // 使用小 epsilon 进行浮点比较
-            if (dx < 0.000001 && dy < 0.000001) {
-               targetD = d;
-            }
-         }
+  let targetD = null;
+  for (const tag of cachedLayoutTags) {
+    if (tag.lon && tag.lat) {
+      const dx = Math.abs(tag.lon - targetCoords[0]);
+      const dy = Math.abs(tag.lat - targetCoords[1]);
+      if (dx < 0.000001 && dy < 0.000001) {
+        targetD = tag;
+        break;
       }
     }
-  });
+  }
   
   if (targetD) {
-    console.log('[TagCloud] 找到目标标签:', targetD.name);
     const width = tagCloudContainer.value.clientWidth;
     const height = tagCloudContainer.value.clientHeight;
-    // 放大比例 2.0，时长 1000ms
-    const scale = 2.0; 
-    const duration = 1000; 
+    const scale = 2.0;
+    const duration = 500; // 缩短动画时长
     
-    // 计算变换矩阵以将目标居中
     const t = d3.zoomIdentity
       .translate(width / 2, height / 2)
       .scale(scale)
       .translate(-targetD.x, -targetD.y);
-      
-    if (zoomBehavior) {
+    
+    // 使用 requestAnimationFrame 避免阻塞
+    requestAnimationFrame(() => {
       svgRef.transition().duration(duration).call(
         zoomBehavior.transform, t
       );
-    }
-  } else {
-    console.warn('[TagCloud] 未找到目标标签，可能被过滤或未显示');
+    });
   }
 };
 
@@ -560,6 +557,31 @@ defineExpose({
   width: 100%;
   height: 100%;
   background-color: #001018; /* 深海蓝背景 */
+}
+
+/* 性能优化: 启用 GPU 加速和减少重绘 */
+.tag-cloud-container :deep(svg) {
+  will-change: transform;
+  contain: layout style paint;
+  touch-action: none; /* 优化触摸事件 */
+}
+
+.tag-cloud-container :deep(g.zoom-group) {
+  will-change: transform;
+}
+
+.tag-cloud-container :deep(g.main-group) {
+  will-change: transform;
+}
+
+.tag-cloud-container :deep(text) {
+  /* 减少文本渲染开销 */
+  text-rendering: optimizeSpeed;
+  font-kerning: none;
+  shape-rendering: optimizeSpeed;
+  /* 禁用可能导致重排的属性 */
+  pointer-events: auto;
+  user-select: none;
 }
 
 .zoom-controls {
