@@ -33,7 +33,65 @@
           inactive-text="关闭"
         />
       </div>
+      
+      <!-- 新增：标签权重控件 -->
+      <div class="control-divider"></div>
+      <div class="control-row">
+        <span class="filter-label">标签权重</span>
+        <el-switch 
+          v-model="weightEnabled" 
+          @change="handleWeightToggle"
+          inline-prompt
+          active-text="开启"
+          inactive-text="关闭"
+        />
+      </div>
+      <div class="control-row">
+        <span class="filter-label" :class="{ 'disabled': !weightEnabled }">显示权重</span>
+        <el-switch 
+          v-model="showWeightValue"
+          :disabled="!weightEnabled"
+          @change="handleShowWeightToggle"
+          inline-prompt
+          active-text="开启"
+          inactive-text="关闭"
+        />
+      </div>
     </div>
+    
+    <!-- 权重选择弹窗 -->
+    <el-dialog
+      v-model="weightDialogVisible"
+      title="请选择需要渲染的地理权重"
+      width="360px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="false"
+      :show-close="false"
+      center
+    >
+      <div class="weight-dialog-content">
+        <el-select
+          v-model="selectedWeightType"
+          placeholder="选择权重类型"
+          style="width: 100%"
+        >
+          <el-option
+            v-for="item in weightOptions"
+            :key="item.value"
+            :label="item.label"
+            :value="item.value"
+          />
+        </el-select>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button @click="cancelWeightDialog">取消</el-button>
+          <el-button type="primary" @click="confirmWeightDialog" :loading="weightLoading">
+            确定
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -65,8 +123,9 @@ import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
  * map-move-end: 当地图移动结束（视野变化）时触发
  * toggle-filter: 当切换实时过滤开关时触发
  * toggle-overlay: 当切换叠加模式时触发
+ * weight-change: 当权重设置变化时触发
  */
-const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay']);
+const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay', 'weight-change']);
 
 /**
  * 定义组件属性
@@ -93,6 +152,18 @@ const heatmapEnabled = ref(false);
 // 叠加模式开关状态
 const overlayEnabled = ref(false);
 
+// ============ 权重控制相关状态 ============
+const weightEnabled = ref(false); // 标签权重开关
+const showWeightValue = ref(false); // 显示权重值开关
+const weightDialogVisible = ref(false); // 权重选择弹窗
+const selectedWeightType = ref('population'); // 选中的权重类型
+const weightLoading = ref(false); // 权重加载中
+
+// 权重选项
+const weightOptions = ref([
+  { value: 'population', label: '人口密度' },
+]);
+
 // 缓存当前绘制的几何图形，用于数据更新时重新筛选
 let currentGeometry = null;
 let currentGeometryType = null; // 'Polygon' | 'Circle'
@@ -108,6 +179,61 @@ const toggleFilter = (val) => {
 const toggleOverlay = (val) => {
   emit('toggle-overlay', val);
 };
+
+/**
+ * 处理标签权重开关变化
+ * 开启时显示权重选择弹窗
+ */
+function handleWeightToggle(val) {
+  if (val) {
+    // 开启时，显示权重选择弹窗
+    weightDialogVisible.value = true;
+  } else {
+    // 关闭时，同时关闭显示权重值
+    showWeightValue.value = false;
+    emit('weight-change', { enabled: false, showValue: false });
+  }
+}
+
+/**
+ * 处理显示权重值开关变化
+ */
+function handleShowWeightToggle(val) {
+  emit('weight-change', { enabled: weightEnabled.value, showValue: val });
+}
+
+/**
+ * 取消权重选择弹窗
+ */
+function cancelWeightDialog() {
+  weightDialogVisible.value = false;
+  weightEnabled.value = false;
+}
+
+/**
+ * 确认权重选择
+ */
+async function confirmWeightDialog() {
+  if (!selectedWeightType.value) {
+    return;
+  }
+  
+  weightLoading.value = true;
+  
+  // 发送权重启用事件，让父组件通知 TagCloud 加载栅格
+  emit('weight-change', { 
+    enabled: true, 
+    showValue: showWeightValue.value,
+    weightType: selectedWeightType.value,
+    needLoad: true  // 表示需要加载栅格
+  });
+  
+  // 延迟关闭弹窗
+  setTimeout(() => {
+    weightLoading.value = false;
+    weightDialogVisible.value = false;
+  }, 500);
+}
 
 // --- 图层定义 ---
 
@@ -176,7 +302,7 @@ const locateLayer = new VectorLayer({
 let deckInstance = null; // deck.gl 实例
 let deckContainer = null; // deck.gl 的 canvas 容器
 const highlightData = ref([]); // 用于 deck.gl ScatterplotLayer 的高亮数据
-const heatmapData = ref([]); // 用于 deck.gl HeatmapLayer 的热力图数据
+const heatmapData = ref([]); // 用于 deck.gl HeatmapLayer (POI 密度) 的热力图数据
 
 // 当前定位的 POI（用于在 deck.gl 中隐藏该点，用 OpenLayers 显示五角星）
 let currentLocatedPoi = null;
@@ -274,7 +400,7 @@ function updateDeckLayers() {
       },
     }),
     
-    // 热力图图层 - 优化参数
+    // POI 密度热力图图层
     new DeckHeatmapLayer({
       id: 'heatmap-layer',
       data: heatmapData.value,
@@ -283,16 +409,15 @@ function updateDeckLayers() {
       getPosition: d => [d.lon, d.lat],
       getWeight: 1,
       radiusPixels: heatmapRadius,
-      intensity: 5, // 增大强度
-      threshold: 0.01, // 降低阈值显示更多细节
+      intensity: 5,
+      threshold: 0.01,
       colorRange: [
-        // 6道色卡：亮黄色 → 深红色
-        [255, 255, 178, 150],  // 亮黄色 (Fewer)
-        [254, 217, 118, 180],  // 浅黄色
-        [254, 178, 76, 200],   // 橙黄色
-        [253, 141, 60, 220],   // 橙色
-        [240, 59, 32, 240],    // 红橙色
-        [189, 0, 38, 255],     // 深红色 (More)
+        [255, 255, 178, 150],
+        [254, 217, 118, 180],
+        [254, 178, 76, 200],
+        [253, 141, 60, 220],
+        [240, 59, 32, 240],
+        [189, 0, 38, 255],
       ],
       updateTriggers: {
         getPosition: [heatmapData.value],
@@ -816,6 +941,7 @@ function onPolygonComplete(polygonGeom, isRefresh = false) {
   const centerPixelObj = calculatePolygonCenter(ringPixels);
 
   showHighlights(insideRaw, { full: true });
+  
   emit('polygon-completed', { 
     polygon: ringCoords.map((c) => toLonLat(c)), 
     center: centerPixelObj,
@@ -953,6 +1079,27 @@ function transformLon(x, y) {
   color: #333;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.filter-label.disabled {
+  color: #999;
+}
+
+.control-divider {
+  width: 100%;
+  height: 1px;
+  background-color: #e0e0e0;
+  margin: 4px 0;
+}
+
+.weight-dialog-content {
+  padding: 10px 0;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 @media (max-width: 768px) {

@@ -25,17 +25,29 @@
         </svg>
       </button>
     </div>
+    
+    <!-- 颜色图例 -->
+    <div v-if="showWeightLegend" class="weight-legend">
+      <div class="legend-title">人口密度</div>
+      <div class="legend-items">
+        <div v-for="(item, index) in legendItems" :key="index" class="legend-item">
+          <span class="legend-color" :style="{ backgroundColor: item.color }"></span>
+          <span class="legend-label">{{ item.label }}</span>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, computed } from 'vue';
 import * as d3 from 'd3';
 import BasicWorker from '../workers/basic.worker.js?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
 import GeoWorker from '../workers/geo.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
 import { ElMessage } from 'element-plus';
+import { rasterExtractor } from '../utils/RasterExtractor.js';
 
 // 定义组件事件
 // hover-feature: 鼠标悬停在标签上时触发，通知地图高亮对应 POI
@@ -55,7 +67,89 @@ const props = defineProps({
   clickedFeatureId: Object, // 当前点击的 Feature 对象（常亮）
   drawMode: String, // 当前绘制模式 ('Circle' | 'Polygon' | 'None')
   circleCenter: Array, // 圆形绘制模式下的圆心坐标 [lon, lat]
+  // 新增权重相关属性
+  weightEnabled: { type: Boolean, default: false }, // 是否启用权重
+  showWeightValue: { type: Boolean, default: false }, // 是否显示权重值
 });
+
+// ============ 权重控制相关状态 ============
+const selectedWeight = ref(''); // 当前选中的权重类型
+const rasterLoading = ref(false); // 栅格加载状态
+const rasterLoaded = ref(false); // 栅格是否已加载
+
+// 权重选项
+const weightOptions = ref([
+  { value: 'population', label: '人口密度' },
+]);
+
+// 栅格文件路径
+const RASTER_URL = '/data/武汉POP.tif';
+
+// ============ Jenks 分类配置 ============
+// 暖色系：蓝-白-红 5 分类
+const WEIGHT_COLORS = [
+  '#2166ac', // 蓝色 (最低)
+  '#67a9cf', // 浅蓝
+  '#f7f7f7', // 白色 (中间)
+  '#ef8a62', // 浅红
+  '#b2182b', // 深红 (最高)
+];
+
+// 分类断点（将在权重计算后更新）
+const classBreaks = ref([]);
+const legendItems = ref([]);
+
+// 是否显示图例
+const showWeightLegend = computed(() => props.weightEnabled && classBreaks.value.length > 0);
+
+/**
+ * Jenks 自然断点分类算法
+ * @param {Array<number>} data - 数值数组
+ * @param {number} numClasses - 分类数量
+ * @returns {Array<number>} - 断点数组
+ */
+function jenksBreaks(data, numClasses) {
+  if (!data || data.length === 0) return [];
+  
+  // 过滤无效值并排序
+  const sortedData = data.filter(d => d !== null && d !== undefined && !isNaN(d) && d > 0).sort((a, b) => a - b);
+  
+  if (sortedData.length === 0) return [];
+  if (sortedData.length <= numClasses) {
+    return sortedData;
+  }
+  
+  const n = sortedData.length;
+  const k = numClasses;
+  
+  // 简化版 Jenks：使用分位数作为近似
+  const breaks = [];
+  for (let i = 1; i < k; i++) {
+    const idx = Math.floor((i * n) / k);
+    breaks.push(sortedData[idx]);
+  }
+  breaks.push(sortedData[n - 1]); // 最大值
+  
+  return breaks;
+}
+
+/**
+ * 根据权重值获取颜色
+ * @param {number} weight - 权重值
+ * @returns {string} - 颜色值
+ */
+function getWeightColor(weight) {
+  if (!classBreaks.value.length || weight === 0 || weight === undefined) {
+    return '#bfeaf1'; // 默认颜色
+  }
+  
+  for (let i = 0; i < classBreaks.value.length; i++) {
+    if (weight <= classBreaks.value[i]) {
+      return WEIGHT_COLORS[i];
+    }
+  }
+  return WEIGHT_COLORS[WEIGHT_COLORS.length - 1];
+}
 
 // 响应式引用
 const tagCloudContainer = ref(null);
@@ -67,12 +161,13 @@ let zoomBehavior = null; // D3 Zoom 行为实例
 let debounceTimer = null; // 防抖定时器
 
 // 常量配置
-const MAX_TAGS = 1000; // 标签显示上限，防止 DOM 过多导致卡顿
-const RESIZE_DEBOUNCE_MS = 120; // 窗口大小调整防抖时间
-const MIN_SCALE = 0.2; // 最小缩放比例
-const MAX_SCALE = 5; // 最大缩放比例
-let currentTransform = d3.zoomIdentity; // 当前缩放变换状态
-let cachedLayoutTags = []; // 缓存布局后的标签数据，用于快速查找
+const MAX_TAGS = 800; // 标签显示上限（降低以提升性能）
+const RESIZE_DEBOUNCE_MS = 120;
+const MIN_SCALE = 0.2;
+const MAX_SCALE = 5;
+let currentTransform = d3.zoomIdentity;
+let cachedLayoutTags = [];
+let viewportCullingEnabled = true; // 启用视口裁剪优化
 
 /**
  * 初始化 Web Worker
@@ -128,9 +223,23 @@ function initWorker() {
 
       // 预计算样式值，减少函数调用
       const getFontSize = d => `${d.fontSize || 16}px`;
-      const getFill = d => d.isCenter ? '#FFA500' : (d.selected ? '#d23' : '#bfeaf1');
+      
+      // 颜色函数：如果启用权重，使用 Jenks 分类颜色
+      const getFill = d => {
+        if (d.isCenter) return '#FFA500';
+        if (d.selected) return '#d23';
+        // 如果启用权重且有分类断点，使用权重颜色
+        if (props.weightEnabled && classBreaks.value.length > 0 && d.weight !== undefined) {
+          return getWeightColor(d.weight);
+        }
+        return '#bfeaf1'; // 默认颜色
+      };
+      
       const getFontWeight = d => d.isCenter ? '900' : (d.selected ? '700' : '400');
       const getTransform = d => `translate(${d.x},${d.y})${d.rotation ? ` rotate(${d.rotation})` : ''}`;
+      
+      // 文本内容：名称已经在数据预处理时包含了权重后缀（如果启用）
+      const getText = d => d.name;
 
       // Enter + Update 合并处理
       texts.join(
@@ -138,26 +247,34 @@ function initWorker() {
           .attr('text-anchor', 'middle')
           .attr('dy', '.35em')
           .style('cursor', 'pointer')
-          .text(d => d.name)
+          .text(getText)
           .style('font-size', getFontSize)
           .style('fill', getFill)
           .style('font-weight', getFontWeight)
           .attr('transform', getTransform)
           .on('mouseover', (event, d) => {
             if (d.isCenter) return;
-            emit('hover-feature', props.data[d.originalIndex]);
+            // 使用 coordKey 从映射表中查找原始 feature
+            const feature = featureMap.get(d.coordKey);
+            if (feature) {
+              emit('hover-feature', feature);
+            }
           })
           .on('mouseout', () => emit('hover-feature', null))
           .on('click', (event, d) => {
             event.stopPropagation();
             if (d.isCenter) return;
-            emit('locate-feature', props.data[d.originalIndex]);
+            // 使用 coordKey 从映射表中查找原始 feature
+            const feature = featureMap.get(d.coordKey);
+            if (feature) {
+              emit('locate-feature', feature);
+            }
           }),
         update => {
           // 性能优化：根据数量决定是否使用动画
           const u = useTransition ? update.transition().duration(transitionDuration) : update;
           return u
-            .text(d => d.name) // 确保名称也更新
+            .text(getText) // 使用 getText 支持显示权重值
             .style('font-size', getFontSize)
             .style('fill', getFill)
             .style('font-weight', getFontWeight)
@@ -174,48 +291,56 @@ function initWorker() {
   };
 }
 
+// Feature 映射表：coordKey -> feature（用于点击/悬停事件的反向查找）
+let featureMap = new Map();
+
+/**
+ * 生成坐标唯一键
+ * @param {number} lon - 经度
+ * @param {number} lat - 纬度
+ * @returns {string} 唯一键
+ */
+function makeCoordKey(lon, lat) {
+  return `${lon?.toFixed(6)}_${lat?.toFixed(6)}`;
+}
+
 /**
  * 更新标签的高亮样式（性能优化版）
  * 同时考虑悬浮和点击状态，点击状态优先级更高（常亮）
+ * 在权重模式下保持使用权重颜色
  */
 function updateHighlight() {
   if (!rootGroupRef || rootGroupRef.empty()) return;
   
-  // 使用缓存的布局数据快速查找匹配的标签索引
-  const findMatchingIndex = (feature) => {
-    if (!feature) return -1;
+  // 生成目标 feature 的 coordKey
+  const getTargetCoordKey = (feature) => {
+    if (!feature) return null;
     const coords = feature.geometry?.coordinates;
-    if (!coords) return -1;
-    
-    // 在缓存的布局数据中查找
-    for (const tag of cachedLayoutTags) {
-      if (tag.lon !== undefined && tag.lat !== undefined) {
-        if (Math.abs(tag.lon - coords[0]) < 0.0001 && 
-            Math.abs(tag.lat - coords[1]) < 0.0001) {
-          return tag.originalIndex;
-        }
-      }
-    }
-    return -1;
+    if (!coords) return null;
+    return makeCoordKey(coords[0], coords[1]);
   };
   
-  // 悬浮和点击的索引
-  const hoveredIndex = findMatchingIndex(props.hoveredFeatureId);
-  const clickedIndex = findMatchingIndex(props.clickedFeatureId);
+  const hoveredKey = getTargetCoordKey(props.hoveredFeatureId);
+  const clickedKey = getTargetCoordKey(props.clickedFeatureId);
   
   // 直接更新样式，不使用过渡动画
   rootGroupRef.selectAll('text')
     .style('fill', d => {
       if (d.isCenter) return '#FFA500';
-      // 点击状态优先（常亮），然后是悬浮状态
-      if (d.originalIndex === clickedIndex || d.originalIndex === hoveredIndex) {
+      // 悬停或点击的标签使用橙色高亮
+      if (d.coordKey === clickedKey || d.coordKey === hoveredKey) {
         return 'orange';
       }
-      return d.selected ? '#d23' : '#bfeaf1';
+      if (d.selected) return '#d23';
+      // 如果启用权重且有分类断点，使用权重颜色
+      if (props.weightEnabled && classBreaks.value.length > 0 && d.weight !== undefined) {
+        return getWeightColor(d.weight);
+      }
+      return '#bfeaf1'; // 默认颜色
     })
     .style('font-weight', d => {
       if (d.isCenter) return '900';
-      if (d.originalIndex === clickedIndex || d.originalIndex === hoveredIndex) {
+      if (d.coordKey === clickedKey || d.coordKey === hoveredKey) {
         return 'bold';
       }
       return d.selected ? '700' : '400';
@@ -225,6 +350,60 @@ function updateHighlight() {
 // 监听悬浮和点击状态变化
 watch(() => props.hoveredFeatureId, () => updateHighlight(), { flush: 'sync' });
 watch(() => props.clickedFeatureId, () => updateHighlight(), { flush: 'sync' });
+
+/**
+ * 处理权重选择变更
+ * 当用户选择权重类型时，加载对应的栅格数据
+ */
+async function handleWeightChange(value) {
+  if (!value) {
+    // 清除权重选择
+    rasterLoaded.value = false;
+    console.log('[TagCloud] 已清除权重选择');
+    return;
+  }
+
+  if (value === 'population') {
+    // 如果栅格已加载，直接使用
+    if (rasterExtractor.loaded) {
+      ElMessage.success('人口密度栅格已就绪，权重将在下次布局时生效');
+      rasterLoaded.value = true;
+      // 触发重新布局
+      scheduleRunLayout();
+      return;
+    }
+
+    // 加载栅格数据
+    rasterLoading.value = true;
+    console.log('[TagCloud] 开始加载人口密度栅格...');
+
+    try {
+      const success = await rasterExtractor.load(RASTER_URL);
+      
+      if (success) {
+        rasterLoaded.value = true;
+        const metadata = rasterExtractor.getMetadata();
+        ElMessage.success({
+          message: `人口密度栅格加载成功！尺寸: ${metadata.width}×${metadata.height}`,
+          duration: 3000
+        });
+        // 触发重新布局以应用权重
+        scheduleRunLayout();
+      } else {
+        selectedWeight.value = '';
+        rasterLoaded.value = false;
+        ElMessage.error('人口密度栅格加载失败，请检查文件路径');
+      }
+    } catch (error) {
+      console.error('[TagCloud] 栅格加载错误:', error);
+      selectedWeight.value = '';
+      rasterLoaded.value = false;
+      ElMessage.error(`加载失败: ${error.message}`);
+    } finally {
+      rasterLoading.value = false;
+    }
+  }
+}
 
 /**
  * 主布局函数：准备数据并发送给 Worker
@@ -262,22 +441,25 @@ const runLayout = (algorithm) => {
   // 设置缩放行为 (Zoom Behavior) - 性能优化版
   if (!zoomBehavior) {
     let lastZoomTime = 0;
-    const ZOOM_THROTTLE = 16; // 约 60fps
+    const ZOOM_THROTTLE = 8; // 提高到 ~120fps 的检测频率
     
     zoomBehavior = d3.zoom()
       .scaleExtent([MIN_SCALE, MAX_SCALE])
       .filter((event) => {
-        // 过滤掉不需要的事件，提高性能
         return !event.ctrlKey && !event.button;
       })
       .on('zoom', (event) => {
-        // 节流处理，减少重绘次数
         const now = performance.now();
         if (now - lastZoomTime < ZOOM_THROTTLE) return;
         lastZoomTime = now;
         
         currentTransform = event.transform;
         zoomGroup.attr('transform', currentTransform);
+        
+        // 注意：视口裁剪功能暂时禁用，因为可能导致标签显示不稳定
+        // if (viewportCullingEnabled) {
+        //   cullingViewport(width, height);
+        // }
       });
   }
 
@@ -291,9 +473,12 @@ const runLayout = (algorithm) => {
 
   // 计算标签位置和选择标记
   // 提取需要的数据属性，构建轻量级对象发送给 Worker
+  
+  // 清空并重建 featureMap
+  featureMap.clear();
+  
   let tags = (props.data || []).map((feature, index) => {
     const name = feature?.properties?.['名称'] ?? feature?.properties?.name ?? feature?.properties?.Name ?? '';
-    const weight = feature?.properties?.weight; // 如果有权重则提取
     
     // 提取地理坐标用于 Geo 布局
     let lon, lat;
@@ -302,31 +487,101 @@ const runLayout = (algorithm) => {
       [lon, lat] = feature.geometry.coordinates;
     }
 
+    // 权重处理：优先使用栅格提取的权重，其次使用属性中的权重
+    let weight = feature?.properties?.weight ?? 0;
+    
+    // 如果启用了权重且栅格已加载，从栅格中提取权重
+    if (props.weightEnabled && rasterLoaded.value && rasterExtractor.loaded) {
+      if (lon !== undefined && lat !== undefined) {
+        weight = rasterExtractor.extractValue(lon, lat);
+      }
+    }
+
+    // 生成唯一坐标键
+    const coordKey = makeCoordKey(lon, lat);
+    
+    // 建立映射表：coordKey -> 原始 feature
+    if (coordKey) {
+      featureMap.set(coordKey, feature);
+    }
+
+    // 如果启用显示权重值，将权重附加到名称后面
+    // 这样 Worker 可以正确测量完整文本的宽度
+    let displayName = name;
+    if (props.showWeightValue && weight > 0) {
+      displayName = `${name} (${Math.round(weight)})`;
+    }
+
     return {
-      name,
-      weight, // 传递权重给 worker
+      name: displayName, // 传递完整显示名称给 worker
+      weight, // 权重值用于颜色和排序
       lon, lat, // 传递坐标
+      coordKey, // 唯一坐标键
       x: width / 2, // 初始位置
       y: height / 2,
-      originalIndex: index, // 保持原始索引以便反查
+      originalIndex: index, // 保留原始索引（仅用于调试）
     };
   }).filter(t => t.name && t.name.trim() !== '');
 
-  console.log('[TagCloud] 名称提取后数量:', tags.length);
+  console.log('[TagCloud] 名称提取后数量:', tags.length, '映射表大小:', featureMap.size);
+
+  // 如果启用了权重，计算 Jenks 分类并按权重降序排序
+  if (props.weightEnabled && rasterLoaded.value) {
+    // 提取所有权重值
+    const allWeights = tags.map(t => t.weight).filter(w => w > 0);
+    
+    // 计算 Jenks 分类断点（5 类）
+    const breaks = jenksBreaks(allWeights, 5);
+    classBreaks.value = breaks;
+    
+    // 生成图例项
+    if (breaks.length > 0) {
+      const newLegendItems = [];
+      let prevBreak = 0;
+      for (let i = 0; i < breaks.length; i++) {
+        newLegendItems.push({
+          color: WEIGHT_COLORS[i],
+          label: `${Math.round(prevBreak)} - ${Math.round(breaks[i])}`,
+          min: prevBreak,
+          max: breaks[i]
+        });
+        prevBreak = breaks[i];
+      }
+      legendItems.value = newLegendItems;
+      console.log('[TagCloud] Jenks 分类断点:', breaks);
+    }
+    
+    // 按权重降序排序
+    tags.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+    console.log('[TagCloud] 已按权重排序. 前5个权重:', tags.slice(0, 5).map(t => (t.weight || 0).toFixed(1)));
+  } else {
+    // 清空分类
+    classBreaks.value = [];
+    legendItems.value = [];
+  }
 
   // 削减非常大的数据集以保持 DOM 大小可控
   if (tags.length > MAX_TAGS) {
-    // 按密度排序后选取前 MAX_TAGS 个，保留最重要的节点
-    const tempTags = calculateDensityGrid(tags, 64, width, height);
-    tempTags.sort((a, b) => b.normalizedDensity - a.normalizedDensity);
-    tags = tempTags.slice(0, MAX_TAGS);
-    console.log('[TagCloud] 已削减至上限:', tags.length);
+    // 如果有权重，按权重排序后选取（保留高权重的节点）
+    // 如果没有权重，按密度排序后选取
+    if (props.weightEnabled && rasterLoaded.value) {
+      // 权重模式：直接截取前 MAX_TAGS 个（已按权重排序）
+      tags = tags.slice(0, MAX_TAGS);
+      console.log('[TagCloud] 按权重削减至上限:', tags.length);
+    } else {
+      // 原逻辑：按密度排序后选取前 MAX_TAGS 个，保留最重要的节点
+      const tempTags = calculateDensityGrid(tags, 64, width, height);
+      tempTags.sort((a, b) => b.normalizedDensity - a.normalizedDensity);
+      tags = tempTags.slice(0, MAX_TAGS);
+      console.log('[TagCloud] 按密度削减至上限:', tags.length);
+    }
   }
 
   // 使用网格快速计算近似密度，用于字体大小插值
   if (tags.length <= MAX_TAGS) {
     tags = calculateDensityGrid(tags, 64, width, height);
   }
+
 
   // 高亮显示在选中边界内的标签（如果有）
   const rect = getSelectedRect(props.selectedBounds);
@@ -413,8 +668,10 @@ watch([
   () => props.polygonCenter,
   () => props.boundaryPolygon,
   () => props.drawMode,
-  () => props.circleCenter
-], ([newAlgorithm, newData, newBounds, newCenter, newPoly, newMode, newCircleCenter], [oldAlgorithm, oldData, oldBounds, oldCenter, oldPoly, oldMode, oldCircleCenter]) => {
+  () => props.circleCenter,
+  () => props.weightEnabled,
+  () => props.showWeightValue
+], ([newAlgorithm, newData, newBounds, newCenter, newPoly, newMode, newCircleCenter, newWeightEnabled, newShowWeightValue], [oldAlgorithm, oldData, oldBounds, oldCenter, oldPoly, oldMode, oldCircleCenter, oldWeightEnabled, oldShowWeightValue]) => {
   // 检查是否需要重新初始化 worker (算法改变 或 模式改变)
   const modeChanged = newMode !== oldMode;
   const algChanged = newAlgorithm !== oldAlgorithm;
@@ -538,10 +795,44 @@ const centerOnFeature = (feature) => {
   }
 };
 
+/**
+ * 加载栅格文件
+ * 供父组件调用，用于加载人口密度栅格
+ * @returns {Promise<boolean>} 是否加载成功
+ */
+async function loadRaster() {
+  if (rasterExtractor.loaded) {
+    rasterLoaded.value = true;
+    return true;
+  }
+  
+  rasterLoading.value = true;
+  console.log('[TagCloud] 开始加载栅格文件...');
+  
+  try {
+    const success = await rasterExtractor.load(RASTER_URL);
+    if (success) {
+      rasterLoaded.value = true;
+      console.log('[TagCloud] 栅格加载成功');
+      return true;
+    } else {
+      rasterLoaded.value = false;
+      return false;
+    }
+  } catch (error) {
+    console.error('[TagCloud] 栅格加载失败:', error);
+    rasterLoaded.value = false;
+    return false;
+  } finally {
+    rasterLoading.value = false;
+  }
+}
+
 // 暴露方法给父组件调用
 defineExpose({
   centerOnFeature,
-  resize
+  resize,
+  loadRaster
 });
 </script>
 
@@ -613,5 +904,54 @@ defineExpose({
 
 .zoom-btn:hover {
   background: rgba(255, 255, 255, 0.2);
+}
+
+/* 权重图例 */
+.weight-legend {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.75);
+  padding: 12px 16px;
+  border-radius: 8px;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.legend-title {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  text-align: center;
+  letter-spacing: 0.5px;
+}
+
+.legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.legend-color {
+  width: 24px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  flex-shrink: 0;
+}
+
+.legend-label {
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-family: 'Consolas', 'Monaco', monospace;
 }
 </style>

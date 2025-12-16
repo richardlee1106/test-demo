@@ -42,12 +42,21 @@ function runSpiralLayout(tags, width, height, configOverrides) {
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
+    // 检测是否有权重数据，并计算最大权重用于归一化
+    const hasWeights = tags.some(t => t.weight !== undefined && t.weight !== null && t.weight > 0);
+    let maxWeight = 1;
+    if (hasWeights) {
+        maxWeight = Math.max(...tags.map(t => t.weight || 0), 1);
+        console.log('[Worker Spiral] 检测到权重数据, 最大权重:', maxWeight);
+    }
+
     const processedTags = tags.map((tag, index) => {
         const totalTags = tags.length;
         let fontSize;
 
-        if (tag.weight !== undefined && tag.weight !== null) {
-            const w = Math.min(1, Math.max(0, tag.weight / 100));
+        if (hasWeights && tag.weight !== undefined && tag.weight !== null) {
+            // 使用实际最大权重进行归一化
+            const w = Math.min(1, Math.max(0, tag.weight / maxWeight));
             fontSize = config.fontMin + w * (config.fontMax - config.fontMin);
         } else {
             const normalizedIndex = index / Math.max(1, totalTags - 1);
@@ -73,7 +82,14 @@ function runSpiralLayout(tags, width, height, configOverrides) {
         };
     });
 
-    processedTags.sort((a, b) => b.fontSize - a.fontSize);
+    // 按权重降序排序（如果有权重），否则按字体大小排序
+    if (hasWeights) {
+        processedTags.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+        console.log('[Worker Spiral] 已按权重排序, 前3个:', processedTags.slice(0, 3).map(t => `${t.name}(${(t.weight || 0).toFixed(1)})`).join(', '));
+    } else {
+        processedTags.sort((a, b) => b.fontSize - a.fontSize);
+    }
+
 
     const placedTags = [];
     let failedCount = 0;

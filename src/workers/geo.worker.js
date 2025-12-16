@@ -164,8 +164,18 @@ function runGeoLayout(tags, width, height, center, config) {
         };
     });
 
-    // ============ 按距离排序（先放中心附近的） ============
-    processedTags.sort((a, b) => a.geoDistance - b.geoDistance);
+    // ============ 按权重或距离排序 ============
+    // 如果有权重，按权重降序排序（高权重优先靠近中心）
+    // 否则按地理距离升序排序（近的先放）
+    const hasWeights = processedTags.some(t => t.weight !== undefined && t.weight !== null && t.weight > 0);
+    
+    if (hasWeights) {
+        processedTags.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+        console.log('[GeoWorker] 已按权重排序，前3个:', processedTags.slice(0, 3).map(t => `${t.name}(${(t.weight || 0).toFixed(1)})`).join(', '));
+    } else {
+        processedTags.sort((a, b) => a.geoDistance - b.geoDistance);
+    }
+
 
     // ============ 碰撞检测与避让算法 ============
     // 已放置的标签列表（初始包含中心标签）

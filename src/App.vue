@@ -48,7 +48,8 @@
                         @click-feature="handleFeatureClick"
                         @map-move-end="handleMapMoveEnd"
                         @toggle-filter="handleToggleFilter"
-                        @toggle-overlay="handleToggleOverlay" />
+                        @toggle-overlay="handleToggleOverlay"
+                        @weight-change="handleWeightChange" />
         </div>
       </section>
       <div class="splitter" @mousedown="startDrag">
@@ -71,6 +72,8 @@
                     :clicked-feature-id="clickedFeatureId"
                     :draw-mode="selectedDrawMode"
                     :circle-center="circleCenterGeo"
+                    :weight-enabled="weightEnabled"
+                    :show-weight-value="showWeightValue"
                     @hover-feature="handleFeatureHover"
                     @locate-feature="handleFeatureLocate" />
         </div>
@@ -122,6 +125,10 @@ const isDragging = ref(false);
 // 叠加模式状态
 const activeGroups = ref([]); // [{ name: 'A', features: [] }, ...]
 const overlayEnabled = ref(false);
+
+// 权重渲染状态
+const weightEnabled = ref(false); // 是否启用权重渲染
+const showWeightValue = ref(false); // 是否显示权重值
 
 /**
  * 节流函数工具
@@ -255,6 +262,41 @@ const handleToggleOverlay = (val) => {
     updateAllPoiFeatures();
   }
 };
+
+/**
+ * 处理权重变化事件
+ * @param {Object} payload - { enabled, showValue, weightType?, needLoad? }
+ */
+async function handleWeightChange(payload) {
+  console.log('[App] 权重变化:', payload);
+  
+  weightEnabled.value = payload.enabled;
+  showWeightValue.value = payload.showValue;
+  
+  // 如果需要加载栅格
+  if (payload.needLoad && payload.enabled) {
+    if (!tagCloudRef.value) {
+      ElMessage.error('标签云组件未就绪');
+      return;
+    }
+    
+    ElMessage.info('正在加载人口密度栅格数据...');
+    
+    try {
+      const success = await tagCloudRef.value.loadRaster();
+      if (success) {
+        ElMessage.success('人口密度栅格加载成功！权重渲染已启用');
+      } else {
+        ElMessage.error('栅格加载失败，请检查文件路径');
+        weightEnabled.value = false;
+      }
+    } catch (error) {
+      console.error('[App] 栅格加载失败:', error);
+      ElMessage.error('栅格加载失败');
+      weightEnabled.value = false;
+    }
+  }
+}
 
 const handleSearch = (keyword) => {
   if (!keyword || !keyword.trim()) {
