@@ -171,7 +171,7 @@
         >停止绘制</el-button
       >
       <el-button type="primary" @click="run" class="control-btn"
-        >运行</el-button
+        >渲染标签云</el-button
       >
       <el-button type="info" @click="reset" class="control-btn"
         >初始化</el-button

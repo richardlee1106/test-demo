@@ -1,5 +1,5 @@
 /**
- * DeckGLOverlay - deck.gl 与 OpenLayers 集成辅助类
+ * DeckGLOverlay - deck.gl 与 OpenLayers 集成辅助
  * 
  * 此类允许在 OpenLayers 地图上叠加 deck.gl 图层，
  * 利用 deck.gl 的 WebGL 渲染能力来提高大量点要素的渲染性能。

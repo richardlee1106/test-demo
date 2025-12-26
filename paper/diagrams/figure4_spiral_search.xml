@@ -1,0 +1,190 @@
+<mxfile host="app.diagrams.net" version="22.1.0">
+  <diagram name="径向螺旋搜索示意图" id="spiral-search">
+    <mxGraphModel dx="800" dy="600" grid="1" guides="1" tooltips="1" connect="1" arrows="1" page="1" pageWidth="700" pageHeight="500">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- 标题 -->
+        <mxCell id="TITLE" value="图4：径向螺旋搜索示意图" style="text;fontFamily=Microsoft YaHei;fontSize=16;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="175" y="10" width="350" height="30" as="geometry"/>
+        </mxCell>
+        
+        <!-- 画布/搜索区域 -->
+        <mxCell id="canvas" value="" style="rounded=0;fillColor=#fafafa;strokeColor=#999;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="50" width="400" height="380" as="geometry"/>
+        </mxCell>
+        
+        <!-- 重心点 -->
+        <mxCell id="centroid" value="" style="ellipse;fillColor=#ff0000;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="272" y="232" width="16" height="16" as="geometry"/>
+        </mxCell>
+        <mxCell id="centroidL" value="Cₙ (重心)" style="text;fontFamily=Microsoft YaHei;fontSize=10;fontStyle=1;fillColor=#f8cecc;strokeColor=#b85450;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="290" y="228" width="65" height="20" as="geometry"/>
+        </mxCell>
+        
+        <!-- 螺旋线路径 (简化表示) -->
+        <mxCell id="spiral1" value="" style="curved=1;endArrow=none;strokeWidth=2;strokeColor=#6c8ebf;dashed=0;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="280" y="240" as="sourcePoint"/>
+            <mxPoint x="290" y="225" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="295" y="240"/>
+              <mxPoint x="300" y="230"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="spiral2" value="" style="curved=1;endArrow=none;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="290" y="225" as="sourcePoint"/>
+            <mxPoint x="265" y="210" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="270" y="210"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="spiral3" value="" style="curved=1;endArrow=none;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="265" y="210" as="sourcePoint"/>
+            <mxPoint x="255" y="260" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="250" y="225"/>
+              <mxPoint x="245" y="250"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="spiral4" value="" style="curved=1;endArrow=none;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="255" y="260" as="sourcePoint"/>
+            <mxPoint x="310" y="270" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="270" y="280"/>
+              <mxPoint x="295" y="280"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="spiral5" value="" style="curved=1;endArrow=classic;strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="310" y="270" as="sourcePoint"/>
+            <mxPoint x="330" y="200" as="targetPoint"/>
+            <Array as="points">
+              <mxPoint x="330" y="250"/>
+              <mxPoint x="340" y="220"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        
+        <!-- 已放置的标签 (障碍物) -->
+        <mxCell id="placed1" value="美食" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="220" y="145" width="60" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="placed2" value="购物" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="285" y="160" width="50" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="placed3" value="休闲" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="180" y="200" width="50" height="25" as="geometry"/>
+        </mxCell>
+        <mxCell id="placed4" value="交通" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Microsoft YaHei;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="300" y="280" width="45" height="22" as="geometry"/>
+        </mxCell>
+        
+        <!-- 碰撞检测点 (失败) -->
+        <mxCell id="fail1" value="" style="ellipse;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="238" y="178" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="fail2" value="" style="ellipse;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="298" y="188" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="fail3" value="" style="ellipse;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="318" y="282" width="10" height="10" as="geometry"/>
+        </mxCell>
+        
+        <!-- 成功放置点 -->
+        <mxCell id="success" value="" style="ellipse;fillColor=#00cc00;strokeColor=#006600;" vertex="1" parent="1">
+          <mxGeometry x="325" y="195" width="14" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="successL" value="✓ 无碰撞" style="text;fontFamily=Microsoft YaHei;fontSize=9;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="342" y="193" width="55" height="18" as="geometry"/>
+        </mxCell>
+        
+        <!-- 待放置标签 -->
+        <mxCell id="newTag" value="酒店" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Microsoft YaHei;fontSize=11;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="305" y="180" width="50" height="25" as="geometry"/>
+        </mxCell>
+        
+        <!-- 右侧说明面板 -->
+        <mxCell id="infoPanel" value="" style="rounded=1;fillColor=#f5f5f5;strokeColor=#999;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="60" width="180" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="infoT" value="搜索流程" style="text;fontFamily=Microsoft YaHei;fontSize=12;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="500" y="68" width="180" height="22" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="step1" value="1. 从重心Cₙ开始" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="510" y="100" width="160" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="step2" value="2. 沿螺旋线向外搜索" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="510" y="125" width="160" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="step3" value="3. 每步进行碰撞检测" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="510" y="150" width="160" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="step4" value="4. 碰撞则继续前进" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="510" y="175" width="160" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="step5" value="5. 无碰撞则放置标签" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;fillColor=#d5e8d4;strokeColor=#82b366;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="510" y="200" width="160" height="18" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="formula" value="螺旋公式:&#xa;r = step × θ&#xa;x = Cₙ.x + r×cos(θ)&#xa;y = Cₙ.y + r×sin(θ)" style="text;fontFamily=Consolas;fontSize=10;align=left;fillColor=#dae8fc;strokeColor=#6c8ebf;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="510" y="240" width="160" height="65" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="rbush" value="RBush碰撞检测:&#xa;tree.collides(bbox)&#xa;时间复杂度: O(log n)" style="text;fontFamily=Consolas;fontSize=10;align=left;fillColor=#fff2cc;strokeColor=#d6b656;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="510" y="320" width="160" height="55" as="geometry"/>
+        </mxCell>
+        
+        <!-- 图例 -->
+        <mxCell id="legend" value="" style="rounded=1;fillColor=#fff;strokeColor=#999;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="440" width="400" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="lgT" value="图例:" style="text;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="90" y="450" width="35" height="18" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1" value="" style="ellipse;fillColor=#ff0000;" vertex="1" parent="1">
+          <mxGeometry x="130" y="454" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1T" value="重心" style="text;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="143" y="451" width="30" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2" value="" style="ellipse;fillColor=#f8cecc;" vertex="1" parent="1">
+          <mxGeometry x="180" y="454" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2T" value="碰撞" style="text;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="193" y="451" width="30" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3" value="" style="ellipse;fillColor=#00cc00;" vertex="1" parent="1">
+          <mxGeometry x="230" y="454" width="10" height="10" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3T" value="成功" style="text;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="243" y="451" width="30" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg4" value="" style="strokeWidth=2;strokeColor=#6c8ebf;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="285" y="459" as="sourcePoint"/>
+            <mxPoint x="315" y="459" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lg4T" value="螺旋路径" style="text;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="320" y="451" width="50" height="15" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg5" value="" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="380" y="452" width="25" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg5T" value="已放置" style="text;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="408" y="451" width="40" height="15" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

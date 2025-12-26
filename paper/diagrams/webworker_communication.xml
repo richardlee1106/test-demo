@@ -1,0 +1,78 @@
+<mxfile host="app.diagrams.net" version="22.1.0">
+  <diagram name="Web Worker通信示意图" id="worker-comm">
+    <mxGraphModel dx="900" dy="600" grid="1" guides="1" tooltips="1" connect="1" arrows="1" page="1" pageWidth="800" pageHeight="400">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        
+        <!-- 主线程 -->
+        <mxCell id="MT" value="" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="60" y="80" width="250" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="MTT" value="主线程 (Main Thread)" style="text;fontFamily=Microsoft YaHei;fontSize=14;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="60" y="90" width="250" height="25" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="TC1" value="TagCloud.vue" style="rounded=1;fillColor=#fff;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="90" y="130" width="190" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="TC2" value="• 用户交互处理&#xa;• UI渲染&#xa;• 数据准备" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="100" y="180" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="TC3" value="⚡ 响应式 | 不阻塞" style="text;fontFamily=Microsoft YaHei;fontSize=9;fontStyle=2;align=center;" vertex="1" parent="1">
+          <mxGeometry x="90" y="245" width="190" height="20" as="geometry"/>
+        </mxCell>
+        
+        <!-- Worker线程 -->
+        <mxCell id="WT" value="" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;strokeWidth=2;" vertex="1" parent="1">
+          <mxGeometry x="490" y="80" width="250" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="WTT" value="Worker线程 (Background)" style="text;fontFamily=Microsoft YaHei;fontSize=14;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="490" y="90" width="250" height="25" as="geometry"/>
+        </mxCell>
+        
+        <mxCell id="WK1" value="basic.worker.js" style="rounded=1;fillColor=#fff;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="520" y="130" width="190" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="WK2" value="• 螺旋搜索&#xa;• RBush碰撞检测&#xa;• 重心更新计算" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=left;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="530" y="180" width="180" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="WK3" value="🔄 CPU密集 | 后台执行" style="text;fontFamily=Microsoft YaHei;fontSize=9;fontStyle=2;align=center;" vertex="1" parent="1">
+          <mxGeometry x="520" y="245" width="190" height="20" as="geometry"/>
+        </mxCell>
+        
+        <!-- 通信箭头 postMessage -->
+        <mxCell id="PM" value="" style="endArrow=classic;strokeWidth=2;strokeColor=#82b366;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="310" y="140" as="sourcePoint"/>
+            <mxPoint x="490" y="140" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="PML" value="postMessage&#xa;{ tags, width, height, config }" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=center;fillColor=#d5e8d4;strokeColor=#82b366;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="330" y="110" width="140" height="35" as="geometry"/>
+        </mxCell>
+        
+        <!-- 通信箭头 onmessage -->
+        <mxCell id="OM" value="" style="endArrow=classic;strokeWidth=2;strokeColor=#9673a6;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="490" y="220" as="sourcePoint"/>
+            <mxPoint x="310" y="220" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="OML" value="onmessage&#xa;[ placedTags... ]" style="text;fontFamily=Microsoft YaHei;fontSize=10;align=center;fillColor=#e1d5e7;strokeColor=#9673a6;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="345" y="215" width="110" height="35" as="geometry"/>
+        </mxCell>
+        
+        <!-- 标题 -->
+        <mxCell id="TITLE" value="图：Web Worker 异步通信模型" style="text;fontFamily=Microsoft YaHei;fontSize=16;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="200" y="20" width="400" height="30" as="geometry"/>
+        </mxCell>
+        
+        <!-- 说明 -->
+        <mxCell id="NOTE" value="主线程保持UI响应，Worker在后台执行CPU密集的布局计算，通过消息传递实现异步通信" style="text;fontFamily=Microsoft YaHei;fontSize=10;fontStyle=2;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="310" width="600" height="20" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
