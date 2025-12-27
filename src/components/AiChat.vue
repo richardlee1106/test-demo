@@ -649,11 +649,11 @@ defineExpose({
 
 /* 移动端快捷按钮优化 */
 @media (max-width: 768px) {
-  /* 头部布局调整 */
+  /* 头部布局调整 - 两行显示 */
   .chat-header {
     padding: 8px 10px;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 6px;
   }
   
   .header-left {
@@ -666,11 +666,14 @@ defineExpose({
   }
   
   .ai-status {
-    font-size: 10px;
+    font-size: 9px;
   }
   
+  /* 按钮组占满一行 */
   .header-right {
-    gap: 4px;
+    width: 100%;
+    justify-content: flex-end;
+    gap: 6px;
   }
   
   .poi-badge {
@@ -678,8 +681,10 @@ defineExpose({
   }
   
   .action-btn {
-    padding: 4px 8px;
-    font-size: 11px;
+    padding: 5px 10px;
+    font-size: 12px;
+    flex: 1;
+    text-align: center;
   }
 
   /* 快捷按钮 */
