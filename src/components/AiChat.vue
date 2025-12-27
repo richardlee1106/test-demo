@@ -11,7 +11,7 @@
         <div class="header-info">
           <span class="ai-name">标签云智能助手</span>
           <span class="ai-status" :class="{ online: isOnline, offline: !isOnline }">
-            {{ isOnline ? '在线' : '离线' }}
+            {{ isOnline ? `在线 (${providerName})` : '离线' }}
           </span>
         </div>
       </div>
@@ -38,7 +38,7 @@
           </svg>
         </div>
         <h3>欢迎使用 标签云 智能分析助手 </h3>
-        <p>我可以帮您分析选中区域内的标签云数据，提供商业洞察和地理分析。</p>
+        <p>我拥有地理感知的能力，可以帮您分析选中区域内的POI数据，提供地理分析和洞察参考。</p>
         <div class="quick-actions">
           <button v-for="action in quickActions" :key="action.text" 
                   @click="sendQuickAction(action.prompt)"
@@ -121,7 +121,8 @@ import {
   checkAIService, 
   formatPOIContext,
   buildSystemPrompt,
-  isLocationRelatedQuery
+  isLocationRelatedQuery,
+  getCurrentProviderInfo
 } from '../utils/aiService.js';
 
 const props = defineProps({
@@ -158,9 +159,15 @@ const quickActions = [
   { text: '💡 发展建议', prompt: '基于POI数据给出区域发展建议' }
 ];
 
+const providerName = ref('');
+
 // 检查 AI 服务状态
 async function checkOnlineStatus() {
   isOnline.value = await checkAIService();
+  if (isOnline.value) {
+    const config = getCurrentProviderInfo();
+    providerName.value = config.name;
+  }
 }
 
 // 发送消息
@@ -642,6 +649,40 @@ defineExpose({
 
 /* 移动端快捷按钮优化 */
 @media (max-width: 768px) {
+  /* 头部布局调整 */
+  .chat-header {
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  
+  .header-left {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .ai-name {
+    font-size: 14px;
+  }
+  
+  .ai-status {
+    font-size: 10px;
+  }
+  
+  .header-right {
+    gap: 4px;
+  }
+  
+  .poi-badge {
+    display: none; /* 移动端隐藏 POI 徽章 */
+  }
+  
+  .action-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  /* 快捷按钮 */
   .quick-actions {
     display: grid;
     grid-template-columns: repeat(2, 1fr);

@@ -38,7 +38,7 @@
           clearable
           @keyup.enter="handleSearch"
         />
-        <el-button type="primary" @click="handleSearch">查询</el-button>
+        <el-button type="primary" @click="handleSearch">AI语义查询</el-button>
         <el-button type="info" @click="handleClearSearch" title="清除查询结果"
           >清除查询结果</el-button
         >
@@ -132,7 +132,7 @@
           clearable
           @keyup.enter="handleSearchMobile"
         />
-        <el-button type="primary" @click="handleSearchMobile">查询</el-button>
+        <el-button type="primary" @click="handleSearchMobile">AI语义查询</el-button>
         <el-button type="info" @click="handleClearSearchMobile">清除</el-button>
         <button class="close-btn" @click="showSearchOverlay = false">
           <svg

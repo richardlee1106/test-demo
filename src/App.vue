@@ -98,7 +98,7 @@
       <!-- 右侧面板：AI 对话（使用 v-show 保持状态） -->
       <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: `${100 - aiSplitPercent}%` }">
         <div class="panel-content">
-          <AiChat ref="aiChatRef" :poi-features="selectedFeatures" @close="toggleAiPanel" />
+          <AiChat ref="aiChatRef" :poi-features="filteredTagData" @close="toggleAiPanel" />
         </div>
       </section>
     </main>
@@ -111,7 +111,7 @@
         </svg>
       </div>
       <span class="ai-fab-text">标签云AI助手</span>
-      <div class="ai-fab-badge" v-if="selectedFeatures.length > 0">{{ selectedFeatures.length }}</div>
+      <div class="ai-fab-badge" v-if="filteredTagData.length > 0">{{ filteredTagData.length }}</div>
     </div>
   </div>
 </template>
@@ -123,6 +123,7 @@ import ControlPanel from './components/ControlPanel.vue';
 import TagCloud from './components/TagCloud.vue';
 import MapContainer from './components/MapContainer.vue';
 import AiChat from './components/AiChat.vue';
+import { semanticSearch } from './utils/aiService';
 
 // 组件引用
 // 组件引用
@@ -408,7 +409,7 @@ async function handleWeightChange(payload) {
   }
 }
 
-const handleSearch = (keyword) => {
+const handleSearch = async (keyword) => {
   if (!keyword || !keyword.trim()) {
     // 恢复显示所有选中点
     tagData.value = selectedFeatures.value;
@@ -418,18 +419,27 @@ const handleSearch = (keyword) => {
     return;
   }
   
-  const kw = keyword.trim().toLowerCase();
-  const filtered = selectedFeatures.value.filter(f => {
-    const name = f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? '';
-    return name.toLowerCase().includes(kw);
-  });
+  // 显示 loading 提示
+  ElMessage.info('正在进行 AI 语义搜索，请稍候...');
   
-  tagData.value = filtered;
-  if (mapComponent.value) {
-    mapComponent.value.showHighlights(filtered, { full: true });
+  try {
+    // 调用 AI 语义搜索
+    const filtered = await semanticSearch(keyword.trim(), selectedFeatures.value);
+    
+    tagData.value = filtered;
+    if (mapComponent.value) {
+      mapComponent.value.showHighlights(filtered, { full: true });
+    }
+    
+    if (filtered.length > 0) {
+      ElMessage.success(`AI 语义搜索完成，找到 ${filtered.length} 条相关信息！`);
+    } else {
+      ElMessage.warning(`未找到与「${keyword}」语义相关的 POI`);
+    }
+  } catch (error) {
+    console.error('[App] AI 语义搜索失败:', error);
+    ElMessage.error('AI 语义搜索失败，请稍后重试');
   }
-  
-  ElMessage.success(`找到 ${filtered.length} 条信息！`);
 };
 
 const handleClearSearch = () => {
