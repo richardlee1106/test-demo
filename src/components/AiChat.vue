@@ -193,8 +193,13 @@ async function sendMessage() {
     // 检测是否为位置相关问题
     const isLocationQuery = isLocationRelatedQuery(text);
     
+    // 调试：输出 POI 数据状态
+    console.log('[AiChat] 发送消息时 POI 数量:', props.poiFeatures?.length || 0);
+    console.log('[AiChat] POI 数据示例:', props.poiFeatures?.slice(0, 2));
+    
     // 智能构建 POI 上下文（位置问题传坐标，否则只传名称）
     const poiContext = formatPOIContext(props.poiFeatures, text);
+    console.log('[AiChat] 生成的 POI 上下文:', poiContext?.substring(0, 200) + '...');
     const systemPrompt = buildSystemPrompt(poiContext, isLocationQuery);
     
     // 如果检测到位置问题，在控制台输出调试信息

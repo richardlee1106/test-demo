@@ -596,6 +596,9 @@ const handleFeatureLocate = (feature) => {
 const handlePolygonCompleted = (payload) => {
   const inside = Array.isArray(payload?.selected) ? payload.selected : [];
   selectedFeatures.value = inside;
+  // 同步设置 tagData，让标签云和 AI 助手都能立即获取数据
+  tagData.value = inside;
+  
   polygonCenter.value = payload?.center || null;
   selectedPolygon.value = Array.isArray(payload?.polygon) ? payload.polygon : null;
   
@@ -605,7 +608,6 @@ const handlePolygonCompleted = (payload) => {
   
   console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素`);
   
-  // 同步控制面板状态（自动关闭绘制按钮状态）
   // 同步控制面板状态（自动关闭绘制按钮状态）
   if (controlPanelRefTag.value) {
     controlPanelRefTag.value.setDrawEnabled(false);
