@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/mimo/:path*",
+      "destination": "https://api.xiaomimimo.com/:path*"
+    }
+  ]
+}
