@@ -1,129 +1,83 @@
 # 🏷️ WebGIS Tag Cloud System (标签云地理信息系统)
 
-基于 Vue 3 + Nuxt.js + Mapbox/Deck.gl 构建的高性能 WebGIS 地理标签云分析系统。集成大语言模型（LLM）实现智能空间分析与语义搜索。
+基于 **Vue 3**、**Nuxt.js** 和 **Deck.gl** 构建的下一代高性能 WebGIS 系统。本项目实现了 WebGIS 与大语言模型（LLM）的深度融合，旨在探索空间数据分析的智能化与自动化。
 
 ![Project Status](https://img.shields.io/badge/Status-Active-success)
 ![Vue](https://img.shields.io/badge/Vue-3.x-42b883)
-![Nuxt](https://img.shields.io/badge/Nuxt-3.x-00DC82)
-![Vercel](https://img.shields.io/badge/Deployment-Vercel-black)
+![WebGIS](https://img.shields.io/badge/WebGIS-Deck.gl-blue)
+![AI](https://img.shields.io/badge/AI-LLM_Integrated-purple)
 
 ---
 
-## ✨ 核心功能
+## ✨ 系统核心优势
 
-### 1. 🗺️ 高性能地理标签云
+### 1. 🚀 高性能渲染带来的极致体验
 
-- **海量数据渲染**：基于 Deck.gl 和 Web Workers，支持平滑渲染数万级 POI 数据。
-- **智能防重叠布局**：内置多种布局算法（四叉树碰撞检测、地理加权布局），确保标签清晰可见且不丢失地理特征。
-- **多维度可视化**：支持按照 POI 权重、类别进行颜色映射和大小控制。
+- **万级数据秒开**：基于 WebGL 硬件加速和 Web Workers 多线程技术，轻松驾驭数万个 POI 数据的实时渲染与交互，告别卡顿。
+- **智能防重叠布局**：内置四叉树碰撞检测与地理加权算法。在保证标签不遮挡、不重叠的同时，最大程度保留数据的地理分布特征，让信息展示清晰直观。
+- **多维度动态可视化**：支持根据数据权重、类别进行实时颜色映射和大小动态调整，关键信息一目了然。
 
-### 2. 🤖 智能 AI 助手 (TagCloud AI)
+### 2. 🧠 地理空间与 AI 的深度融合
 
-- **空间上下文感知**：AI 能够自动获取用户当前地图视野内的 POI 数据，进行基于地理位置的智能分析。
-- **语义搜索系统**：打破传统关键词匹配限制，支持如"我想喝奶茶"、"适合约会的地方"等自然语言语义搜索。
-- **多模态服务架构**：
-  - **本地模式**：支持连接本地 LM Studio 运行开源模型（如 Qwen, Llama），保护数据隐私。
-  - **云端模式**：无缝集成外部大模型 API（如 Xiaomi MiMo），提供更强的推理能力。
+- **上下文感知智能助手**：内置 "标签云 AI 助手"，能够自动感知用户当前地图视野内的所有 POI 数据。你无需手动输入数据，AI 已然知晓一切。
+- **自然语言语义搜索**：打破传统关键词匹配的桎梏。系统能理解如 "适合周末约会的地方"、"我想喝点清爽的饮料" 等自然语言指令，智能筛选出符合语境的地理位置。
+- **空间与语义的双重过滤**：结合地理围栏（Geo-Fencing）与语义分析，实现对空间数据的精准筛选与挖掘。
 
-### 3. 🛡️ 前后端分离架构
+### 3. 🛡️ 安全与隐私优先的架构设计
 
-- **API 安全网关**：通过 Nuxt.js 中间层转发 AI 请求，彻底隐藏 API Key，杜绝前端泄密风险。
-- **统一服务入口**：
-  - **开发环境**：使用 Nginx 反向代理，统一管理前端（5173）和后端（3000）流量。
-  - **生产环境**：专门针对 Vercel Edge Functions 优化的 Serverless 架构，支持全球加速访问。
+- **前后端分离架构**：前端专注于极致的交互体验，后端负责复杂的业务逻辑与安全网关。
+- **数据隐私保护**：系统采用严格的数据脱敏机制，确保 AI 在分析过程中不会泄露用户的敏感地理信息。
+- **灵活的模型接入**：底层架构支持灵活接入各类大语言模型，无论是追求极致性能的云端模型，还是注重隐私的本地私有化模型，系统均能无缝适配。
 
 ---
 
-## 🏗️ 技术架构
+## 🏗️ 核心技术特性
 
-| 模块     | 技术栈                          | 说明                                             |
-| -------- | ------------------------------- | ------------------------------------------------ |
-| **前端** | Vue 3, Vite, Deck.gl, Mapbox GL | 负责地图交互、标签渲染、Web Worker 调度          |
-| **后端** | Nuxt.js (Nitro Engine)          | 负责 AI 接口转发、Prompt 工程、跨域处理          |
-| **部署** | Vercel Serverless Functions     | 用于承载 AI 相关的 API 接口 (Chat/Search/Status) |
-| **网关** | Nginx                           | (本地开发用) 统一反向代理，解决 CORS 和端口管理  |
+| 模块           | 特性描述                                                                                  |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| **可视化引擎** | 基于 **Deck.gl** 与 **OpenLayers**，实现毫秒级的大规模地理数据渲染。                      |
+| **智能交互**   | 支持点击自动飞跃 (FlyTo)、双向高亮联动、热力图动态分析等高级交互模式。                    |
+| **AI 引擎**    | 集成流式响应 (SSE) 技术，提供打字机式的流畅对话体验；内置 Prompt 工程优化，确保专业回复。 |
+| **算法核心**   | 自研 **动态重心引力算法 (DCGA)** 与 **径向螺旋搜索 (RSS)**，实现标签云布局的最优解。      |
+
+---
+
+## 🌈 系统界面概览
+
+系统主要由以下部分组成：
+
+1.  **沉浸式地图底座**：承载所有地理信息的交互与展示。
+2.  **动态标签云图层**：智能分布的 POI 文本标签。
+3.  **智能对话面板**：与 AI 助手进行自然语言交互的窗口。
+4.  **悬浮控制中心**：提供热力图开关、布局模式切换等快捷操作。
+
+## 🏗️ 技术架构与目录设计
+
+系统采用现代化的前后端分离架构，前端专注于极致的可视化渲染，后端负责复杂的业务逻辑与 AI 上下文处理。
+
+### 🛠️ 技术栈一览
+
+| 模块           | 技术栈                 | 核心职责                                                         |
+| -------------- | ---------------------- | ---------------------------------------------------------------- |
+| **前端核心**   | **Vue 3, Vite**        | 现代化的响应式应用框架，提供丝滑的单页应用 (SPA) 体验。          |
+| **可视化引擎** | **Deck.gl, Mapbox GL** | 基于 WebGL 的 GPU 硬件加速渲染，支撑万级 POI 秒级加载。          |
+| **后端服务**   | **Nuxt.js (Nitro)**    | 高性能的 API 网关，负责 AI 请求的路由分发与鉴权。                |
+| **AI 运行时**  | **Serverless Edge**    | 基于边缘计算的 AI 推理层，支持高并发的流式 (SSE) 响应。          |
+| **并行计算**   | **Web Workers**        | 将高算力的 TagCloud 布局算法（碰撞检测、引力计算）剥离至子线程。 |
 
 ### 📂 项目目录结构
 
 ```bash
 vite-project/
-├── src/                    # 前端核心源码 (Vue)
-│   ├── components/         # UI 组件 (MapContainer, AiChat...)
-│   ├── workers/            # Web Workers (布局计算)
-│   └── utils/              # 工具函数
-├── nuxt-backend/           # 本地后端服务 (Nuxt)
-│   ├── server/api/ai/      # AI 接口逻辑
-│   └── .env                # 包含敏感 API Key (不上传)
-├── api/                    # Vercel Serverless Functions (云端部署用)
-├── nginx-1.28.1/           # Nginx 服务 (已从 Git 移除，需本地下载)
-└── vercel.json             # Vercel 路由配置
+├── src/                    # 前端源代码 (Vue 3 + Deck.gl)
+│   ├── components/         # 业务组件 (地图容器、AI 对话面板、悬浮控制器)
+│   ├── workers/            # 核心算法 (Web Workers 实现的布局引擎)
+│   └── utils/              # 工具库 (地理计算、AI 服务封装、数据解析)
+├── nuxt-backend/           # 后端服务代码 (Nuxt.js)
+│   ├── server/api/ai/      # AI 业务接口 (流式对话、语义搜索、状态检测)
+│   └── utils/              # 后端工具 (Prompt 工程、上下文构建器)
+└── api/                    # Serverless Edge Functions (云端边缘运行时适配)
 ```
-
----
-
-## 🚀 快速开始
-
-### 1. 环境准备
-
-- Node.js > 18.0
-- (可选) LM Studio (如果需要本地 AI 分析)
-- (可选) Nginx (如果需要本地统一代理)
-
-### 2. 安装依赖
-
-```bash
-# 安装前端依赖
-npm install
-
-# 安装后端依赖
-cd nuxt-backend
-npm install
-```
-
-### 3. 配置环境变量
-
-在 `nuxt-backend` 目录下创建 `.env` 文件：
-
-```ini
-# Xiaomi MiMo API Key (必填)
-MIMO_API_KEY=sk-xxxxxx
-
-# Local LM Studio (选填，默认 localhost:1234)
-LOCAL_LM_API=http://localhost:1234/v1
-```
-
-### 4. 启动服务
-
-**方案 A：一键启动 (推荐 Windows 用户)**
-双击根目录下的 `start-services.bat` 脚本，将自动启动 Nginx、Nuxt 后端和 Vite 前端。
-
-**方案 B：手动启动**
-
-```bash
-# 终端 1: 启动后端
-cd nuxt-backend
-npm run dev
-
-# 终端 2: 启动前端
-npm run dev
-```
-
-访问地址：`http://localhost:8080` (通过 Nginx) 或 `http://localhost:5173` (直连前端)
-
----
-
-## ☁️ Vercel 部署指南
-
-本项目已针对 Vercel 做了深度优化，支持前端 + Serverless API 一键部署。
-
-1. **Fork** 本仓库到你的 GitHub。
-2. 在 Vercel Dashboard 导入项目。
-3. 在 **Settings -> Environment Variables** 中添加环境变量：
-   - `MIMO_API_KEY`: 你的 API 密钥
-4. 确保 **Node.js Version** 设置为 **20.x**。
-5. 点击 Deploy，即可获得完整的在线 WebGIS AI 系统。
-
----
 
 ## 📝 许可证
 
