@@ -344,12 +344,22 @@ function getDeckViewState() {
  * 根据分组索引获取颜色
  */
 function getColorByGroupIndex(groupIndex) {
+  // 扩展颜色列表：前几个颜色差异大，后续颜色递进
   const colors = [
-    [255, 0, 0, 160],    // 红色
-    [0, 0, 255, 160],    // 蓝色
-    [128, 0, 128, 160],  // 紫色
+    [255, 0, 0, 180],      // 红色
+    [0, 128, 255, 180],    // 蓝色
+    [0, 200, 80, 180],     // 绿色
+    [255, 165, 0, 180],    // 橙色
+    [138, 43, 226, 180],   // 紫色
+    [0, 206, 209, 180],    // 青色
+    [255, 20, 147, 180],   // 深粉
+    [255, 215, 0, 180],    // 金色
+    [70, 130, 180, 180],   // 钢青
+    [154, 205, 50, 180],   // 黄绿
+    [220, 20, 60, 180],    // 猩红
+    [0, 139, 139, 180],    // 深青
   ];
-  return colors[groupIndex] || colors[0];
+  return colors[groupIndex % colors.length] || colors[0];
 }
 
 /**
@@ -391,8 +401,8 @@ function updateDeckLayers() {
       getRadius: 4,
       getFillColor: d => getColorByGroupIndex(d.groupIndex || 0),
       getLineColor: d => {
-        const colors = [[255, 0, 0], [0, 0, 255], [128, 0, 128]];
-        return colors[d.groupIndex || 0] || colors[0];
+        const fill = getColorByGroupIndex(d.groupIndex || 0);
+        return [fill[0], fill[1], fill[2]]; // 移除 alpha
       },
       updateTriggers: {
         getFillColor: [highlightData.value, currentLocatedPoi],
@@ -679,7 +689,7 @@ watch(() => props.poiFeatures, () => {
       onCircleComplete(currentGeometry, true);
     }
   }
-}, { deep: true });
+}, { deep: false });
 
 /**
  * 重建 OpenLayers 要素

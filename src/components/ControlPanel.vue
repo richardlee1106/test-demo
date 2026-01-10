@@ -4,7 +4,7 @@
       <div class="select-group">
         <el-select
           v-model="selectedGroup"
-          placeholder="按地理语义分组"
+          placeholder="请先选择语义大类"
           @change="handleGroupChange"
           class="group-select"
         >
@@ -15,59 +15,52 @@
             :value="item.value"
           ></el-option>
         </el-select>
-        <el-select
-          v-model="localAlgorithm"
-          placeholder="算法选择"
-          class="algorithm-select"
-          @change="handleAlgorithmChange"
-        >
-          <el-option
-            v-for="item in algorithms"
-            :key="item.value"
-            :label="item.label"
-            :value="item.value"
-          ></el-option>
-        </el-select>
       </div>
 
       <div class="search-box">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="输入关键词..."
-          class="search-input"
-          clearable
-          @keyup.enter="handleSearch"
-        />
-        <el-button type="primary" @click="handleSearch">AI语义查询</el-button>
-        <el-button type="info" @click="handleClearSearch" title="清除查询结果"
-          >清除查询结果</el-button
+        <el-button 
+          :type="hasSearchResult ? 'warning' : 'primary'" 
+          @click="handleSemanticQueryClick"
         >
+          {{ hasSearchResult ? '清除查询结果' : '语义查询' }}
+        </el-button>
+        <el-button type="success" @click="handleSaveResult">保存筛选结果</el-button>
       </div>
     </div>
+
+    <!-- 语义查询弹窗 -->
+    <el-dialog
+      v-model="searchDialogVisible"
+      title="AI 语义查询"
+      width="400px"
+      :close-on-click-modal="false"
+    >
+      <div class="search-dialog-content">
+        <el-input
+          v-model="searchKeyword"
+          placeholder="输入关键词，如：奶茶、火锅、便利店..."
+          class="search-input-dialog"
+          clearable
+          @keyup.enter="confirmSearch"
+        />
+        <p class="search-tip">AI 将根据语义智能匹配相关 POI，支持品牌名、类别等模糊搜索。</p>
+      </div>
+      <template #footer>
+        <el-button @click="searchDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmSearch" :loading="isSearching">确定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 移动端顶部栏 -->
     <div class="mobile-top-bar mobile-only">
       <el-select
         v-model="selectedGroup"
-        placeholder="按地理语义分组"
+        placeholder="请先选择语义大类"
         @change="handleGroupChange"
         class="group-select mobile-select"
       >
         <el-option
           v-for="item in groups"
-          :key="item.value"
-          :label="item.label"
-          :value="item.value"
-        ></el-option>
-      </el-select>
-      <el-select
-        v-model="localAlgorithm"
-        placeholder="算法选择"
-        class="algorithm-select mobile-select"
-        @change="handleAlgorithmChange"
-      >
-        <el-option
-          v-for="item in algorithms"
           :key="item.value"
           :label="item.label"
           :value="item.value"
@@ -89,8 +82,8 @@
       @click.self="showMobileMenu = false"
     >
       <div class="mobile-menu-content">
-        <div class="menu-item" @click="openSearchOverlay">
-          <span>搜索</span>
+        <div class="menu-item" @click="handleMobileSemanticQuery">
+          <span>{{ hasSearchResult ? '清除查询' : '语义查询' }}</span>
         </div>
         <div class="menu-divider"></div>
         
@@ -114,41 +107,18 @@
 
         <div class="menu-divider"></div>
         <div class="menu-item" @click="run">
-          <span>运行</span>
+          <span>渲染标签云</span>
         </div>
         <div class="menu-item" @click="reset">
           <span>初始化</span>
         </div>
+        <div class="menu-item" @click="handleSaveResultMobile">
+          <span>保存结果</span>
+        </div>
       </div>
     </div>
 
-    <!-- 搜索浮层 -->
-    <div v-if="showSearchOverlay" class="search-overlay">
-      <div class="search-overlay-content">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="输入关键词..."
-          class="search-input-overlay"
-          clearable
-          @keyup.enter="handleSearchMobile"
-        />
-        <el-button type="primary" @click="handleSearchMobile">AI语义查询</el-button>
-        <el-button type="info" @click="handleClearSearchMobile">清除</el-button>
-        <button class="close-btn" @click="showSearchOverlay = false">
-          <svg
-            viewBox="0 0 24 24"
-            width="24"
-            height="24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-          >
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
-      </div>
-    </div>
+    <!-- 移动端搜索弹窗（与桌面端共用同一个 el-dialog） -->
 
     <div v-if="isTagPanel" class="right-controls" :class="{ 'full-width': isTagPanel }">
       <!-- 搜索控件已移动到左侧 -->
@@ -181,23 +151,27 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
-import axios from 'axios';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
+import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change']);
 const selectedGroup = ref('');
 const drawEnabled = ref(false);
 const selectedDrawMode = ref('');
 const searchKeyword = ref('');
 const showMobileMenu = ref(false);
-const showSearchOverlay = ref(false);
+const searchDialogVisible = ref(false);
+const isSearching = ref(false);
+const hasSearchResult = ref(false);
+const groupLoading = ref(false);
 
 const props = defineProps({
   onRunAlgorithm: Function,
   searchOffset: { type: Number, default: 0 },
   panelType: { type: String, default: 'map' }, // 'map' (地图) 或 'tag' (标签)
-  currentAlgorithm: { type: String, default: 'basic' }
+  currentAlgorithm: { type: String, default: 'basic' },
+  currentPoiFeatures: { type: Array, default: () => [] } // 当前显示的 POI 数据
 });
 
 const isMapPanel = computed(() => props.panelType === 'map');
@@ -220,42 +194,84 @@ const groups = ref([
   { value: '运动健身', label: '运动健身' },
 ]);
 
-const algorithms = ref([
-  { value: 'basic', label: '动态重心引力' },
-  { value: 'spiral', label: '阿基米德螺线' },
-]);
+// 默认使用动态重心引力算法
+const localAlgorithm = ref('basic');
 
-const localAlgorithm = ref(props.currentAlgorithm);
+const dataWorker = ref(null);
 
-// 监听 props 变化更新本地状态
-watch(() => props.currentAlgorithm, (newVal) => {
-  localAlgorithm.value = newVal;
-});
-
-const handleAlgorithmChange = (val) => {
-  emit('update:currentAlgorithm', val);
+const handleGroupChange = () => {
+  if (!selectedGroup.value) return;
+  emit('loading-change', true); // 通知父组件开始 loading
+  
+  if (!dataWorker.value) {
+    dataWorker.value = new DataLoaderWorker();
+    
+    dataWorker.value.onmessage = (e) => {
+      const { success, name, features, error } = e.data;
+      if (success) {
+        ElMessage.success(`成功加载！${name}`);
+        emit('data-loaded', { success: true, name, features });
+      } else {
+        console.error(error);
+        ElMessage.error(`加载失败！${name}`);
+        emit('data-loaded', { success: false, name, features: [] });
+      }
+      emit('loading-change', false); // 通知父组件结束 loading
+    };
+    
+    dataWorker.value.onerror = (e) => {
+      console.error('Worker error:', e);
+      ElMessage.error(`数据加载遇到错误！`);
+      emit('loading-change', false);
+    };
+  }
+  
+  // 发送消息给 Worker 开始加载
+  dataWorker.value.postMessage({
+    url: `/data/${selectedGroup.value}.geojson`,
+    name: selectedGroup.value
+  });
 };
 
-const handleGroupChange = async () => {
-  if (!selectedGroup.value) return;
-  try {
-    const response = await axios.get(`/data/${selectedGroup.value}.geojson`);
-    const features = response.data?.features || [];
-    ElMessage.success(`成功加载！${selectedGroup.value}`);
-    emit('data-loaded', { success: true, name: selectedGroup.value, features });
-  } catch (error) {
-    ElMessage.error(`加载失败！${selectedGroup.value}`);
-    emit('data-loaded', { success: false, name: selectedGroup.value, features: [] });
+onBeforeUnmount(() => {
+  if (dataWorker.value) {
+    dataWorker.value.terminate();
   }
-}
+});
 
-const handleSearch = () => {
+// 语义查询按钮点击处理
+const handleSemanticQueryClick = () => {
+  if (hasSearchResult.value) {
+    // 有查询结果时，清除结果
+    handleClearSearch();
+  } else {
+    // 没有查询结果时，打开弹窗
+    searchDialogVisible.value = true;
+  }
+};
+
+// 确认搜索
+const confirmSearch = async () => {
+  if (!searchKeyword.value.trim()) {
+    ElMessage.warning('请输入搜索关键词');
+    return;
+  }
+  isSearching.value = true;
   emit('search', searchKeyword.value);
+  // 搜索完成后由父组件调用 setSearchResult 更新状态
+  searchDialogVisible.value = false;
+  isSearching.value = false;
 };
 
 const handleClearSearch = () => {
   searchKeyword.value = '';
+  hasSearchResult.value = false;
   emit('clear-search');
+};
+
+// 保存筛选结果为 CSV
+const handleSaveResult = () => {
+  emit('save-result');
 };
 
 // const props = defineProps({ onRunAlgorithm: Function }); // Merged above
@@ -298,18 +314,22 @@ const toggleMobileMenu = () => {
   showMobileMenu.value = !showMobileMenu.value;
 };
 
-const openSearchOverlay = () => {
+// 移动端语义查询处理
+const handleMobileSemanticQuery = () => {
   showMobileMenu.value = false;
-  showSearchOverlay.value = true;
+  if (hasSearchResult.value) {
+    // 有查询结果时，清除结果
+    handleClearSearch();
+  } else {
+    // 没有查询结果时，打开弹窗
+    searchDialogVisible.value = true;
+  }
 };
 
-const handleSearchMobile = () => {
-  handleSearch();
-  // showSearchOverlay.value = false; // 可选：保留打开以查看结果或关闭？目前保持打开。
-};
-
-const handleClearSearchMobile = () => {
-  handleClearSearch();
+// 移动端保存筛选结果
+const handleSaveResultMobile = () => {
+  showMobileMenu.value = false;
+  emit('save-result');
 };
 
 // 向父组件暴露方法
@@ -320,7 +340,17 @@ const setDrawEnabled = (val) => {
   }
 };
 
-defineExpose({ setDrawEnabled });
+// 设置搜索结果状态（由父组件调用）
+const setSearchResult = (hasResult) => {
+  hasSearchResult.value = hasResult;
+};
+
+// 设置搜索中状态
+const setSearching = (val) => {
+  isSearching.value = val;
+};
+
+defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* const debugShow = () => {
   if (!selectedGroup.value) {
@@ -352,6 +382,8 @@ defineExpose({ setDrawEnabled });
 .select-group {
   display: flex;
   gap: 16px;
+  position: relative; /* 必须添加此项，否则 loading 动画可能飘到屏幕外 */
+  min-width: 100px;
 }
 
 .right-controls {
@@ -387,6 +419,10 @@ defineExpose({ setDrawEnabled });
   justify-content: flex-end;
 }
 
+/* 优化 loading 覆盖层圆角 */
+:deep(.el-loading-mask) {
+  border-radius: 4px;
+}
 .search-box {
   display: flex;
   align-items: center;
@@ -398,13 +434,28 @@ defineExpose({ setDrawEnabled });
   width: 160px;
 }
 
-.group-select,
-.algorithm-select {
-  width: 200px; /* 减小宽度以适应布局 */
+.group-select {
+  width: 200px;
 }
 
 .draw-select {
   width: 120px;
+}
+
+/* 语义查询弹窗样式 */
+.search-dialog-content {
+  padding: 10px 0;
+}
+
+.search-input-dialog {
+  width: 100%;
+}
+
+.search-tip {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.5;
 }
 
 .control-btn {

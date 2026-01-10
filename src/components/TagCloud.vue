@@ -36,6 +36,11 @@
         </div>
       </div>
     </div>
+    
+    <!-- 空状态提示 -->
+    <div v-if="!data || data.length === 0" class="empty-state">
+      <div class="empty-text">请先添加点进行渲染</div>
+    </div>
   </div>
 </template>
 
@@ -877,7 +882,7 @@ defineExpose({
 
 .zoom-controls {
   position: absolute;
-  bottom: 20px;
+  top: 20px;
   right: 20px;
   display: flex;
   flex-direction: column;
@@ -910,7 +915,7 @@ defineExpose({
 .weight-legend {
   position: absolute;
   bottom: 20px;
-  left: 20px;
+  right: 20px;
   z-index: 10;
   background: rgba(0, 0, 0, 0.75);
   padding: 12px 16px;
@@ -953,5 +958,27 @@ defineExpose({
   color: rgba(255, 255, 255, 0.85);
   font-size: 11px;
   font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.empty-state {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5; /* 确保在 canvas 上方，但可能在 tooltip 下方 */
+  pointer-events: none; /* 不阻挡底层可能的交互，但这里本来就空 */
+}
+
+.empty-text {
+  font-size: 24px;
+  color: rgba(255, 255, 255, 0.4);
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  user-select: none;
 }
 </style>

@@ -5,38 +5,42 @@
       <div class="header-left">
         <ControlPanel ref="controlPanelRefMap"
                       panel-type="map"
-                      :current-algorithm="selectedAlgorithm"
-                      @update:current-algorithm="(val) => selectedAlgorithm = val"
                       @data-loaded="handleDataLoaded"
                       @search="handleSearch"
-                      @clear-search="handleClearSearch" />
+                      @clear-search="handleClearSearch"
+                      @loading-change="isLoading = $event" />
       </div>
       <div class="header-right">
         <ControlPanel ref="controlPanelRefTag"
                       panel-type="tag"
-                      :current-algorithm="selectedAlgorithm"
                       @toggle-draw="handleToggleDraw"
                       @debug-show="handleDebugShow"
                       @reset="handleReset"
+                      @save-result="handleSaveResult"
                       :on-run-algorithm="handleRunAlgorithm" />
       </div>
     </header>
 
-    <!-- 移动端顶部栏 -->
     <header class="mobile-header mobile-only-block">
       <ControlPanel ref="controlPanelRefMobile"
                     panel-type="mobile"
-                    :current-algorithm="selectedAlgorithm"
-                    @update:current-algorithm="(val) => selectedAlgorithm = val"
                     @data-loaded="handleDataLoaded"
                     @toggle-draw="handleToggleDraw"
                     @debug-show="handleDebugShow"
                     @reset="handleReset"
                     @search="handleSearch"
                     @clear-search="handleClearSearch"
+                    @save-result="handleSaveResult"
+                    @loading-change="isLoading = $event"
                     :on-run-algorithm="handleRunAlgorithm" />
     </header>
-    <main class="bottom-split" :class="{ 'ai-expanded': aiExpanded }">
+    <main 
+      class="bottom-split" 
+      :class="{ 'ai-expanded': aiExpanded }"
+      v-loading="isLoading" 
+      element-loading-text="正在加载数据..."
+      element-loading-background="rgba(0, 0, 0, 0.7)"
+    >
       <!-- 默认模式：左右分布 | AI展开模式：左侧上下分布 -->
       <section class="left-section" :style="leftSectionStyle">
         <!-- 地图面板 -->
@@ -98,7 +102,7 @@
       <!-- 右侧面板：AI 对话（使用 v-show 保持状态） -->
       <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: `${100 - aiSplitPercent}%` }">
         <div class="panel-content">
-          <AiChat ref="aiChatRef" :poi-features="filteredTagData" @close="toggleAiPanel" />
+          <AiChat ref="aiChatRef" :poi-features="selectedFeatures" @close="toggleAiPanel" />
         </div>
       </section>
     </main>
@@ -111,13 +115,13 @@
         </svg>
       </div>
       <span class="ai-fab-text">标签云AI助手</span>
-      <div class="ai-fab-badge" v-if="filteredTagData.length > 0">{{ filteredTagData.length }}</div>
+      <div class="ai-fab-badge" v-if="selectedFeatures.length > 0">{{ selectedFeatures.length }}</div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue';
+import { ref, shallowRef, onMounted, nextTick, computed } from 'vue';
 import { ElMessage } from 'element-plus';
 import ControlPanel from './components/ControlPanel.vue';
 import TagCloud from './components/TagCloud.vue';
@@ -135,13 +139,13 @@ const mapComponent = ref(null);
 const aiChatRef = ref(null);
 
 // 核心数据状态
-const map = ref(null); // OpenLayers 地图实例
-const tagData = ref([]); // 传递给 TagCloud 的数据（通常是选中区域的 POI）
+const map = shallowRef(null); // OpenLayers 地图实例
+const tagData = shallowRef([]); // 传递给 TagCloud 的数据（优化：使用 shallowRef）
 const selectedAlgorithm = ref('basic'); // 当前选择的布局算法
 const spiralConfig = ref(null); // 螺旋布局配置
 const selectedBounds = ref(null); // 选中区域的边界
-const allPoiFeatures = ref([]); // 所有加载的 POI 数据（虽然加载了但在未过滤前可能不全部显示）
-const selectedFeatures = ref([]); // 当前选中的 POI 集合（通过绘图选择）
+const allPoiFeatures = shallowRef([]); // 所有加载的 POI 数据（优化：使用 shallowRef）
+const selectedFeatures = shallowRef([]); // 当前选中的 POI 集合（优化：使用 shallowRef）
 const polygonCenter = ref(null); // 选中多边形的中心点（屏幕像素坐标）
 const selectedPolygon = ref(null); // 选中多边形的经纬度坐标数组
 
@@ -149,7 +153,9 @@ const selectedPolygon = ref(null); // 选中多边形的经纬度坐标数组
 const hoveredFeatureId = ref(null); // 当前悬停的要素（用于联动高亮）
 const clickedFeatureId = ref(null); // 当前点击的要素（常亮状态）
 const filterEnabled = ref(false); // 是否开启实时视野过滤
+
 const mapBounds = ref(null); // 当前地图视野边界 [minLon, minLat, maxLon, maxLat]
+const isLoading = ref(false); // 全局/区域加载状态
 
 // 绘图模式状态
 const selectedDrawMode = ref(''); // 存储当前的绘图模式 ('Polygon' 或 'Circle')
@@ -326,14 +332,10 @@ const handleDataLoaded = (payload) => {
       // 覆盖模式：替换所有
       activeGroups.value = [newGroup];
     } else {
-      // 叠加模式：追加
+      // 叠加模式：追加（不再限制数量）
       // 检查是否已存在
       const exists = activeGroups.value.find(g => g.name === payload.name);
       if (!exists) {
-        if (activeGroups.value.length >= 3) {
-          ElMessage.warning('最多仅支持三类！');
-          return;
-        }
         activeGroups.value.push(newGroup);
       } else {
         // 更新已存在的
@@ -416,6 +418,8 @@ const handleSearch = async (keyword) => {
     if (mapComponent.value) {
       mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
     }
+    // 通知子组件无搜索结果
+    if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
     return;
   }
   
@@ -433,25 +437,64 @@ const handleSearch = async (keyword) => {
     
     if (filtered.length > 0) {
       ElMessage.success(`AI 语义搜索完成，找到 ${filtered.length} 条相关信息！`);
+      // 通知子组件有搜索结果
+      if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(true);
     } else {
       ElMessage.warning(`未找到与「${keyword}」语义相关的 POI`);
+      if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
     }
   } catch (error) {
     console.error('[App] AI 语义搜索失败:', error);
     ElMessage.error('AI 语义搜索失败，请稍后重试');
+    if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   }
 };
 
 const handleClearSearch = () => {
   // 恢复显示所有选中点
   tagData.value = selectedFeatures.value;
-  // 恢复默认算法为动态重心引力
-  selectedAlgorithm.value = 'basic';
+  // 通知子组件清除搜索结果
+  if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   if (mapComponent.value) {
     mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
   }
   ElMessage.info('已清除查询结果');
 };
+
+/**
+ * 保存筛选结果为 CSV 文件
+ * 导出字段：名称、大类、中类（不包含经纬度）
+ */
+function handleSaveResult() {
+  const features = filteredTagData.value;
+  if (!features || features.length === 0) {
+    ElMessage.warning('没有可保存的筛选结果');
+    return;
+  }
+  
+  // 构建 CSV 内容
+  const headers = ['名称', '大类', '中类'];
+  let csvContent = headers.join(',') + '\n';
+  
+  features.forEach(f => {
+    const props = f.properties || {};
+    const name = (props['名称'] || props.name || '').replace(/,/g, '，'); // 转义逗号
+    const bigCategory = (props['大类'] || props.category || '').replace(/,/g, '，');
+    const midCategory = (props['中类'] || props.subcategory || '').replace(/,/g, '，');
+    csvContent += `"${name}","${bigCategory}","${midCategory}"\n`;
+  });
+  
+  // 创建并下载文件
+  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `POI_筛选结果_${new Date().toISOString().slice(0,10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  
+  ElMessage.success(`已保存 ${features.length} 条 POI 数据`);
+}
 
 // 第一个分隔条拖拽处理（默认模式：地图 | 标签云）
 const startDrag1 = () => {
@@ -591,13 +634,15 @@ const handleFeatureLocate = (feature) => {
 /**
  * 处理多边形/圆形绘制完成
  * 接收地图组件筛选出的 POI 数据
+ * 注意：绘制完成后仅保存选中数据，不自动渲染标签云
+ * 用户需要点击"渲染标签云"按钮才会渲染
  * @param {Object} payload - { polygon, center, selected, type, circleCenter }
  */
 const handlePolygonCompleted = (payload) => {
   const inside = Array.isArray(payload?.selected) ? payload.selected : [];
   selectedFeatures.value = inside;
-  // 同步设置 tagData，让标签云和 AI 助手都能立即获取数据
-  tagData.value = inside;
+  // 注意：不再自动设置 tagData，需要用户点击"渲染标签云"按钮
+  // tagData.value = inside;
   
   polygonCenter.value = payload?.center || null;
   selectedPolygon.value = Array.isArray(payload?.polygon) ? payload.polygon : null;
@@ -606,7 +651,7 @@ const handlePolygonCompleted = (payload) => {
   selectedDrawMode.value = payload?.type || 'Polygon';
   circleCenterGeo.value = payload?.circleCenter || null;
   
-  console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素`);
+  console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素，等待用户点击渲染按钮`);
   
   // 同步控制面板状态（自动关闭绘制按钮状态）
   if (controlPanelRefTag.value) {
@@ -619,7 +664,7 @@ const handlePolygonCompleted = (payload) => {
   if (!inside.length) {
     ElMessage.warning('该区域内没有任何信息！');
   } else {
-    ElMessage.success(`已选中 ${inside.length} 个POI，并在地图中高亮显示`);
+    ElMessage.success(`已选中 ${inside.length} 个POI，点击"渲染标签云"按钮进行渲染`);
   }
 };
 

@@ -59,8 +59,14 @@ button:focus-visible {
   outline: 4px auto -webkit-focus-ring-color;
 }
 
-.card {
-  padding: 2em;
+/* Element Plus 下拉框全局配置 */
+.el-select-dropdown {
+  max-height: 400px !important;
+  z-index: 3000 !important;
+}
+
+.el-select-dropdown__list {
+  max-height: 380px !important;
 }
 
 #app {

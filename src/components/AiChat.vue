@@ -11,7 +11,7 @@
         <div class="header-info">
           <span class="ai-name">标签云智能助手</span>
           <span class="ai-status" :class="{ online: isOnline, offline: !isOnline }">
-            {{ isOnline ? `在线 (${providerName})` : '离线' }}
+            {{ statusText }}
           </span>
         </div>
       </div>
@@ -160,6 +160,14 @@ const quickActions = [
 ];
 
 const providerName = ref('');
+const isLocalProvider = ref(false);
+
+// 计算状态文本
+const statusText = computed(() => {
+  if (!isOnline.value) return '离线';
+  // 本地显示 "Local LM"，云端统一显示 "在线"
+  return isLocalProvider.value ? 'Local LM' : '在线';
+});
 
 // 检查 AI 服务状态
 async function checkOnlineStatus() {
@@ -167,6 +175,7 @@ async function checkOnlineStatus() {
   if (isOnline.value) {
     const config = getCurrentProviderInfo();
     providerName.value = config.name;
+    isLocalProvider.value = config.id === 'local';
   }
 }
 
