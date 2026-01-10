@@ -22,3 +22,6 @@ dist-ssr
 *.sln
 *.sw?
 
+
+nginx-1.28.1/
+benchmark/
