@@ -7,16 +7,16 @@
 为了解决 AI API Key 暴露风险、提升系统安全性并支持更灵活的部署模式，本次更新主要包含：
 
 1.  **前后端分离架构 (Frontend-Backend Separation)**：
-    - 将原有的单体 Vite 应用拆分为 Vite 前端 + Nuxt.js 后端。
+    - 将原有的单体 Vite 应用拆分为 Vite 前端 + Fastify 后端。
     - 实现 API 流量转发与统一网关管理。
 2.  **AI 服务安全性增强 (Security Enhancement)**：
     - 移除前端所有敏感 API Key 配置。
     - 在后端通过环境变量安全管理凭证。
 3.  **多模态 AI 服务接入 (Multi-provider AI)**：
     - 支持**本地模式**：无缝对接本地 LM Studio (Qwen, Llama 等开源模型)。
-    - 支持**云端模式**：集成商业大模型 API (如 Xiaomi MiMo)。
+    - 支持**云端模式**：集成商业大模型 API。
     - 实现服务状态自动检测与故障自动降级 (Fallback)。
-4.  **云原适配 (Cloud Native Adaptation)**：
+4.  **云原生适配 (Cloud Native Adaptation)**：
     - 适配 Vercel Serverless Functions (Edge Runtime)。
     - 解决 Serverless 环境下的 SSE (Server-Sent Events) 流式响应问题。
 5.  **AI 助手身份体系 (AI Identity System)**：
@@ -29,27 +29,47 @@
 
 ### 2.1 前后端分离架构
 
-**技术栈**：Vue 3, Nuxt 3 (Nitro), Nginx
+**技术栈**：Vue 3, Fastify, Nginx
 
 **实现逻辑**：
 
 1.  **服务拆分**：
-    - **Frontend**: 专注于地图渲染 (Deck.gl)、UI 交互与状态管理。
-    - **Backend**: 专注于业务逻辑、API 代理、敏感数据处理。
+    - **Frontend (Vite)**: 专注于地图渲染 (Deck.gl)、UI 交互与状态管理。
+    - **Backend (Fastify)**: 专注于业务逻辑、API 代理、敏感数据处理。
 2.  **统一网关 (Nginx)**：
     - 配置 Nginx 作为反向代理服务器，监听 8080 端口。
     - `/` 路由转发至 Vite 开发服务器 (5173)。
-    - `/api/` 路由转发至 Nuxt 后端服务器 (3000)。
+    - `/api/` 路由转发至 Fastify 后端服务器 (3000)。
     - 统一 CORS 策略与安全头部 (Headers)。
+3.  **Fastify 优势**：
+    - 轻量高效：依赖包仅 52 个，启动速度毫秒级。
+    - 原生 JSON Schema 验证。
+    - 插件生态成熟（CORS, 环境变量等）。
 
-### 2.2 AI 语义搜索与流式对话
+### 2.2 双后端架构设计
+
+为适配不同部署场景，系统采用双后端设计：
+
+| 目录               | 框架        | 用途     | AI 服务支持           |
+| ------------------ | ----------- | -------- | --------------------- |
+| `fastify-backend/` | Fastify     | 本地开发 | 本地 LM Studio + 云端 |
+| `api/`             | Vercel Edge | 云端部署 | 仅云端                |
+
+**设计原因**：
+
+- Fastify 是持续运行的 Node.js 服务器，无法直接部署到 Serverless 平台。
+- Vercel 只支持按需触发的 Serverless Functions。
+- 因此需要两套代码，分别适配本地和云端环境。
+
+### 2.3 AI 语义搜索与流式对话
 
 **技术栈**：Fetch API (Streams), Server-Sent Events (SSE)
 
 **实现逻辑**：
 
 1.  **流式响应封装**：
-    - 后端使用 `h3` 的 `sendStream` 或原生 `Response` 对象通过 Pipeline 转发大模型的 SSE 数据流。
+    - 后端使用 `reply.raw.writeHead()` 设置 SSE 响应头。
+    - 通过 `ReadableStream` 管道转发大模型的流式数据。
     - 确保 `Content-Type: text/event-stream` 和 `Connection: keep-alive` 正确设置。
 2.  **上下文增强**：
     - **POI Context**: 自动收集当前地图视野内的 POI 数据 (名称、类别、坐标)。
@@ -58,7 +78,7 @@
     - 前端发送自然语言查询 (如"找个喝咖啡的地方")。
     - 后端利用大模型进行语义分析，在大规模 POI 数据中进行意图匹配与筛选。
 
-### 2.3 身份设定与隐私保护
+### 2.4 身份设定与隐私保护
 
 **技术栈**：System Prompt Engineering
 
@@ -70,17 +90,17 @@
 2.  **无数据兜底**：
     - 即使当前未选中任何 POI 数据，系统也会构建基础的身份 Prompt，防止 AI 在空上下文时 "恢复出厂设置" (暴露出 Qwen/GPT 等原始身份)。
 
-### 2.4 Vercel Serverless 适配
+### 2.5 Vercel Serverless 适配
 
 **技术栈**：Vercel Edge Functions
 
 **实现逻辑**：
 
 1.  **Edge Runtime 兼容**：
-    - 重构 API 接口，放弃 Node.js 特有的 `res.write` API。
-    - 改用 Web Standard `UnreadableStream` / `ReadableStream` 进行流式输出。
+    - 使用 Web Standard `Response` 对象和 `ReadableStream` 进行流式输出。
+    - 放弃 Node.js 特有的 `res.write` API。
 2.  **配置隔离**：
-    - 本地开发环境使用 `nuxt-backend` (支持本地模型调用)。
+    - 本地开发环境使用 `fastify-backend` (支持本地模型调用)。
     - Vercel 部署环境使用 `/api` 目录下的 Serverless Functions (仅支持云端模型)。
     - 通过 `vercel.json` 路由规则实现环境自动切换。
 
@@ -103,5 +123,10 @@
 ### 问题 3：Nginx Upstream 连接失败
 
 - **现象**：Nginx 报错 502 Bad Gateway，无法连接后端。
-- **原因**：Windows 环境下 `localhost` 解析与 IPv6 的兼容性问题，Nuxt 监听在 `[::1]:3000` 而 Nginx 尝试连接 `127.0.0.1:3000`。
+- **原因**：Windows 环境下 `localhost` 解析与 IPv6 的兼容性问题。
 - **解决**：统一将 Nginx upstream 配置修改为 `localhost`，利用系统自身的 hosts 解析机制。
+
+### 问题 4：框架选型优化
+
+- **现象**：最初选用 Nuxt.js 作为后端，但其 SSR/页面渲染等功能对纯 API 服务来说过于冗余。
+- **解决**：迁移至 Fastify，依赖包从 597 个减少到 52 个，启动速度从秒级提升到毫秒级。
