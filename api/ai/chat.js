@@ -223,12 +223,12 @@ export default async function handler(request) {
   const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content || ''
   const isLocationQuery = isLocationRelatedQuery(lastUserMessage)
   
-  // 构建 POI 上下文
-  let systemPrompt = ''
-  if (poiFeatures.length > 0) {
-    const poiContext = formatPOIContext(poiFeatures, lastUserMessage)
-    systemPrompt = buildSystemPrompt(poiContext, isLocationQuery)
-  }
+  // 构建上下文和系统提示词（即使没有 POI 数据也需要维持身份设定）
+  const poiContext = poiFeatures.length > 0 
+    ? formatPOIContext(poiFeatures, lastUserMessage)
+    : '当前未选中任何 POI 数据。'
+  
+  const systemPrompt = buildSystemPrompt(poiContext, isLocationQuery)
 
   // 构建完整消息列表
   const fullMessages = systemPrompt 
