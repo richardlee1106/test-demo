@@ -6,21 +6,14 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     proxy: {
-      // 代理 LM Studio API 请求，解决跨域问题
+      // 代理 AI API 请求到 Nuxt 后端
       '/api/ai': {
-        target: 'http://localhost:1234',
+        target: 'http://localhost:3000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/ai/, '/v1'),
-        // 超时设置（大模型响应可能较慢）
+        // 流式响应支持
         timeout: 120000,
       },
-      // 代理 Xiaomi MiMo API
-      '/api/mimo': {
-        target: 'https://api.xiaomimimo.com',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/mimo/, ''),
-        timeout: 120000,
-      }
+      // 注意：MiMo 代理已移至后端，前端不再需要
     }
   }
 })
