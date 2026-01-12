@@ -8,7 +8,7 @@
           :props="{ checkStrictly: true, expandTrigger: 'hover' }"
           placeholder="请先按照语义选择类别"
           @change="handleCascaderChange"
-          class="group-select"
+          class="group-select glass-cascader"
           popper-class="poi-cascader-popper"
           :teleported="false"
           :show-all-levels="false"
@@ -65,7 +65,7 @@
         :props="{ checkStrictly: true }"
         placeholder="请先按照语义选择类别"
         @change="handleCascaderChange"
-        class="group-select mobile-select"
+        class="group-select mobile-select glass-cascader"
         :teleported="false"
         :show-all-levels="false"
       />
@@ -140,15 +140,15 @@
         <el-option label="绘制多边形" value="Polygon" />
         <el-option label="绘制圆形（中心型）" value="Circle" />
       </el-select>
-      <el-button v-else type="warning" @click="stopDraw" class="control-btn"
-        >停止绘制</el-button
-      >
-      <el-button type="primary" @click="run" class="control-btn"
-        >渲染标签云</el-button
-      >
-      <el-button type="info" @click="reset" class="control-btn"
-        >初始化</el-button
-      >
+      <button v-else @click="stopDraw" class="warning-btn desktop-btn control-btn">
+        停止绘制
+      </button>
+      <button @click="run" class="success-btn desktop-btn control-btn">
+        渲染标签云
+      </button>
+      <button @click="reset" class="info-btn desktop-btn control-btn">
+        初始化
+      </button>
     </div>
   </div>
 </template>
@@ -603,7 +603,8 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 }
 
 /* 通用按钮基础样式 (用于保持一致性) */
-.primary-btn, .warning-btn {
+/* 通用按钮基础样式 (用于保持一致性) */
+.primary-btn, .warning-btn, .success-btn, .info-btn, .save-btn {
   flex-shrink: 0;
   border: none;
   border-radius: 4px;
@@ -616,6 +617,10 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
   line-height: 32px;
   transition: transform 0.15s, box-shadow 0.15s;
   height: 32px;
+  display: inline-flex; /* 确保内容垂直居中 */
+  align-items: center;
+  justify-content: center;
+  outline: none; /* 去除点击时的默认轮廓 */
 }
 
 .primary-btn {
@@ -639,6 +644,72 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 .warning-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(230, 162, 60, 0.4);
+}
+
+.success-btn {
+  background: linear-gradient(135deg, #67c23a 0%, #529b2e 100%);
+}
+
+.success-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(103, 194, 58, 0.4);
+}
+
+.info-btn {
+  background: linear-gradient(135deg, #909399 0%, #73767a 100%);
+}
+
+.info-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(144, 147, 153, 0.4);
+}
+
+/* 选择器 UI 优化 (高级感) */
+.glass-cascader {
+  /* 确保自身背景透明 */
+  background: transparent !important;
+}
+
+/* 针对内部 wrapper 的样式 */
+.glass-cascader :deep(.el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.1) !important; /* 半透明背景 */
+  backdrop-filter: blur(10px); /* 毛玻璃效果 */
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1) !important;
+  border-radius: 6px !important;
+  padding: 0 11px !important;
+  transition: all 0.3s ease;
+}
+
+/* 悬停状态 */
+.glass-cascader:hover :deep(.el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.2) !important;
+  border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* 聚焦状态 */
+.glass-cascader :deep(.el-input__wrapper.is-focus) {
+  background: rgba(255, 255, 255, 0.25) !important;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6) inset, 0 4px 12px rgba(0, 0, 0, 0.2) !important;
+  border-color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* 输入框文字颜色 */
+.glass-cascader :deep(.el-input__inner) {
+  color: #fff !important; /* 白色文字适应深色背景 */
+  font-weight: 500;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+/* 占位符颜色 */
+.glass-cascader :deep(.el-input__inner::placeholder) {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+/* 图标颜色 */
+.glass-cascader :deep(.el-input__suffix-inner .el-icon) {
+  color: rgba(255, 255, 255, 0.8) !important;
 }
 
 /* 桌面端按钮通用类 */
