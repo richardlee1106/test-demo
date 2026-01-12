@@ -155,19 +155,37 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
     buffer = lines.pop() || ''
 
     for (const line of lines) {
+      // 调试：打印原始行
+      // console.log('[AI Stream Raw]', line)
+
       if (line.startsWith('data: ')) {
         const data = line.slice(6).trim()
         if (data === '[DONE]') continue
 
         try {
           const parsed = JSON.parse(data)
-          const delta = parsed.choices?.[0]?.delta?.content || ''
+          // 兼容不同的 OpenAIChat 格式
+          const choice = parsed.choices?.[0]
+          const delta = choice?.delta?.content || choice?.text || ''
+          
+          // 特殊处理：有些推理引擎可能返回空 delta 但有 finish_reason
+          if (choice?.finish_reason) {
+             // 结束
+          }
+
           if (delta) {
-            fullContent += delta
-            onChunk(delta)
+             fullContent += delta
+             onChunk(delta)
+          } else {
+             // 尝试检查是否包含错误信息
+             if (parsed.error) {
+                console.error('[AI Stream Error]', parsed.error)
+                onChunk(`\n[系统错误: ${parsed.error.message || '未知错误'}]\n`)
+             }
           }
         } catch (e) {
-          // 忽略解析错误
+          // 如果解析失败，可能是非 JSON 格式的 raw text（罕见情况）
+          console.warn('[AI Stream Parse Error]', e, line)
         }
       }
     }
