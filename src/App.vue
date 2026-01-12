@@ -463,25 +463,57 @@ const handleClearSearch = () => {
 
 /**
  * 保存筛选结果为 CSV 文件
- * 导出字段：名称、大类、中类（不包含经纬度）
+ * 优先级逻辑：
+ * 1. 如果有搜索/筛选后的 tagData（标签云数据），保存 tagData
+ * 2. 如果没有 tagData 但有 selectedFeatures（绘制工具选中的点），保存 selectedFeatures
+ * 3. 如果都没有，则没有可保存的数据
  */
 function handleSaveResult() {
-  const features = filteredTagData.value;
+  let features = [];
+  let dataSource = '';
+  
+  console.log('[App] 保存检查 - tagData:', tagData.value?.length, 
+              'selectedFeatures:', selectedFeatures.value?.length,
+              'filteredTagData:', filteredTagData.value?.length);
+
+  // 优先级 1: 如果开启了视野过滤且有数据
+  if (filterEnabled.value && filteredTagData.value && filteredTagData.value.length > 0) {
+    features = filteredTagData.value;
+    dataSource = '视野内筛选';
+  }
+  // 优先级 2: 标签云/搜索结果数据
+  else if (tagData.value && tagData.value.length > 0) {
+    features = tagData.value;
+    dataSource = '标签云数据';
+  }
+  // 优先级 3: 绘制工具选中的点（地图上高亮显示的点）
+  else if (selectedFeatures.value && selectedFeatures.value.length > 0) {
+    features = selectedFeatures.value;
+    dataSource = '绘制选中区域';
+  }
+  // 优先级 4: 所有加载的数据
+  else if (allPoiFeatures.value && allPoiFeatures.value.length > 0) {
+    features = allPoiFeatures.value;
+    dataSource = '全部加载数据';
+  }
+  
   if (!features || features.length === 0) {
     ElMessage.warning('没有可保存的筛选结果');
     return;
   }
   
   // 构建 CSV 内容
-  const headers = ['名称', '大类', '中类'];
+  const headers = ['名称', '大类', '中类', '小类', '经度', '纬度'];
   let csvContent = headers.join(',') + '\n';
   
   features.forEach(f => {
     const props = f.properties || {};
-    const name = (props['名称'] || props.name || '').replace(/,/g, '，'); // 转义逗号
+    const coords = f.geometry?.coordinates || ['', ''];
+    const name = (props['名称'] || props.name || '').replace(/,/g, '，').replace(/"/g, '""');
     const bigCategory = (props['大类'] || props.category || '').replace(/,/g, '，');
     const midCategory = (props['中类'] || props.subcategory || '').replace(/,/g, '，');
-    csvContent += `"${name}","${bigCategory}","${midCategory}"\n`;
+    const smallCategory = (props['小类'] || '').replace(/,/g, '，');
+    csvContent += `"${name}","${bigCategory}","${midCategory}","${smallCategory}",${coords[0]},${coords[1]}\n`;
   });
   
   // 创建并下载文件
@@ -489,11 +521,13 @@ function handleSaveResult() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `POI_筛选结果_${new Date().toISOString().slice(0,10)}.csv`;
+  link.download = `POI_${dataSource}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(link);
   link.click();
+  document.body.removeChild(link);
   URL.revokeObjectURL(url);
   
-  ElMessage.success(`已保存 ${features.length} 条 POI 数据`);
+  ElMessage.success(`已保存 ${features.length} 条 POI 数据 (${dataSource})`);
 }
 
 // 第一个分隔条拖拽处理（默认模式：地图 | 标签云）

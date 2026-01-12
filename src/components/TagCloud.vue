@@ -528,6 +528,23 @@ const runLayout = (algorithm) => {
     };
   }).filter(t => t.name && t.name.trim() !== '');
 
+  // 去重逻辑：相同名称+相同坐标的只保留一个
+  // 相同名称但不同坐标的保留（视为不同位置的同名地点）
+  const dedupeMap = new Map();
+  for (const tag of tags) {
+    // 使用"名称+坐标"作为唯一键
+    const dedupeKey = `${tag.name}_${tag.coordKey}`;
+    if (!dedupeMap.has(dedupeKey)) {
+      dedupeMap.set(dedupeKey, tag);
+    }
+  }
+  const deduplicatedCount = tags.length - dedupeMap.size;
+  tags = Array.from(dedupeMap.values());
+  
+  if (deduplicatedCount > 0) {
+    console.log(`[TagCloud] 去重：移除了 ${deduplicatedCount} 个重复标签，保留 ${tags.length} 个`);
+  }
+
   console.log('[TagCloud] 名称提取后数量:', tags.length, '映射表大小:', featureMap.size);
 
   // 如果启用了权重，计算 Jenks 分类并按权重降序排序

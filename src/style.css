@@ -69,6 +69,93 @@ button:focus-visible {
   max-height: 380px !important;
 }
 
+/* ============================================
+   全局级联选择器样式覆盖（Element Plus）
+   ============================================ */
+
+/* 彻底隐藏单选圆圈 - 使用最强选择器 */
+.el-cascader-panel .el-cascader-node .el-radio,
+.el-cascader-panel .el-cascader-node .el-radio__input,
+.el-cascader-panel .el-cascader-node .el-radio__inner,
+.el-cascader-panel .el-radio,
+.el-cascader-menu .el-radio,
+.el-popper .el-cascader-node .el-radio {
+  display: none !important;
+  visibility: hidden !important;
+  width: 0 !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  position: absolute !important;
+  left: -9999px !important;
+}
+
+/* 节点左侧间距（补偿圆圈消失的空间） */
+.el-cascader-node__content {
+  padding-left: 12px !important;
+}
+
+/* 选中项高亮样式 */
+.el-cascader-node.is-active > .el-cascader-node__content > .el-cascader-node__label {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+/* 增加下拉面板高度 - 直接设置滚动区域 */
+.el-cascader-menu {
+  min-height: 280px !important;
+  max-height: 400px !important;
+}
+
+.el-cascader-menu .el-cascader-menu__wrap,
+.el-cascader-menu .el-scrollbar__wrap {
+  max-height: 380px !important;
+}
+
+.el-cascader-menu .el-scrollbar__view {
+  min-height: 260px;
+}
+
+/* 桌面端级联选择器 */
+@media (min-width: 769px) {
+  .el-cascader__dropdown,
+  .el-popper.is-light.el-cascader__dropdown {
+    min-width: 450px !important;
+  }
+  
+  .el-cascader-panel {
+    min-width: 450px;
+  }
+  
+  .el-cascader-menu {
+    min-width: 200px;
+  }
+}
+
+/* 移动端级联选择器适配 */
+@media (max-width: 768px) {
+  .el-cascader__dropdown,
+  .el-popper.is-light.el-cascader__dropdown {
+    width: 96vw !important;
+    max-width: 96vw !important;
+    left: 2vw !important;
+    right: 2vw !important;
+    transform: none !important;
+  }
+  
+  .el-cascader-panel {
+    width: 100%;
+    display: flex;
+    overflow-x: auto;
+  }
+  
+  .el-cascader-menu {
+    min-width: 45vw !important;
+    max-width: 50vw;
+    flex-shrink: 0;
+  }
+}
+
 #app {
   height: 100vh;
   width: 100vw;
