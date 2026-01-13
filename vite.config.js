@@ -6,14 +6,19 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     proxy: {
-      // 代理 AI API 请求到 Nuxt 后端
+      // 代理 AI API 请求到 Fastify 后端
       '/api/ai': {
-        target: 'http://localhost:3000',
+        target: 'http://localhost:3456',
         changeOrigin: true,
         // 流式响应支持
         timeout: 120000,
       },
-      // 注意：MiMo 代理已移至后端，前端不再需要
+      // 代理空间查询 API
+      '/api/spatial': {
+        target: 'http://localhost:3456',
+        changeOrigin: true,
+        timeout: 60000,
+      },
     }
   }
 })

@@ -421,6 +421,11 @@ const runLayout = (algorithm) => {
     return;
   }
 
+  if (!tagCloudContainer.value) {
+     console.warn('[TagCloud] 容器未就绪，跳过布局');
+     return;
+  }
+
   const width = tagCloudContainer.value.clientWidth;
   const height = tagCloudContainer.value.clientHeight;
 

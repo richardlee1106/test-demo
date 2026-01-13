@@ -1,9 +1,37 @@
 /**
- * AI 路由模块
- * 提供 chat, search, status 等接口
+ * AI 路由模块 (三阶段 Spatial-RAG 管道)
+ * 
+ * 架构：
+ * ┌───────────────────────────────────────────────────────────
+ * │ 阶段1: Planner (LLM)                                            
+ * │   用户问题 → LLM → QueryPlan JSON (不看 POI 数据)               
+ * ├────────────────────────────────────────────────────────────
+ * │ 阶段2: Executor (后端)                                          
+ * │   QueryPlan → PostGIS + Milvus → 压缩结果 (不调 LLM)            
+ * ├────────────────────────────────────────────────────────────
+ * │ 阶段3: Writer (LLM)                                             
+ * │   压缩结果 → LLM → 自然语言回答 (Token 可控)                     
+ * └────────────────────────────────────────────────────────────
+ * 
+ * Token 消耗目标: < 2500 tokens/请求
  */
 
-import { aiHelpers } from './helpers.js'
+import { createRAGSession } from '../../services/ragLogger.js'
+
+// RAG 会话存储
+const ragSessions = new Map()
+
+// 定期清理过期会话
+setInterval(() => {
+  const now = Date.now()
+  const maxAge = 30 * 60 * 1000 // 30 分钟
+  
+  for (const [id, session] of ragSessions.entries()) {
+    if (now - session.createdAt > maxAge) {
+      ragSessions.delete(id)
+    }
+  }
+}, 5 * 60 * 1000) // 每 5 分钟清理一次
 
 async function aiRoutes(fastify, options) {
   
@@ -11,23 +39,35 @@ async function aiRoutes(fastify, options) {
   // GET /api/ai/status - 服务状态检查
   // ========================================
   fastify.get('/status', async (request, reply) => {
-    const localApiBase = process.env.LOCAL_LM_API || 'http://localhost:1234/v1'
+    const localApiBase = process.env.LOCAL_LM_API || process.env.LLM_BASE_URL || 'http://localhost:1234/v1'
     
     try {
-      // 尝试连接本地 LM Studio
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 3000)
       
       await fetch(`${localApiBase}/models`, { signal: controller.signal })
       clearTimeout(timeout)
       
-      return { online: true, provider: 'local', providerName: 'Local LM Studio' }
-    } catch (e) {
-      // 本地不可用，检查云端配置
-      if (process.env.MIMO_API_KEY) {
-        return { online: true, provider: 'mimo', providerName: 'Cloud AI Service' }
+      return { 
+        online: true, 
+        provider: 'local', 
+        providerName: 'Local LM Studio',
+        architecture: 'three-stage-spatial-rag'
       }
-      return { online: false, provider: null, providerName: 'No AI Service Available' }
+    } catch (e) {
+      if (process.env.MIMO_API_KEY) {
+        return { 
+          online: true, 
+          provider: 'mimo', 
+          providerName: 'Cloud AI Service',
+          architecture: 'three-stage-spatial-rag'
+        }
+      }
+      return { 
+        online: false, 
+        provider: null, 
+        providerName: 'No AI Service Available' 
+      }
     }
   })
 
@@ -35,10 +75,9 @@ async function aiRoutes(fastify, options) {
   // GET /api/ai/models - 获取可用模型列表
   // ========================================
   fastify.get('/models', async (request, reply) => {
-    const localApiBase = process.env.LOCAL_LM_API || 'http://localhost:1234/v1'
+    const localApiBase = process.env.LOCAL_LM_API || process.env.LLM_BASE_URL || 'http://localhost:1234/v1'
     
     try {
-      // 尝试从本地 LM Studio 获取模型列表
       const controller = new AbortController()
       const timeout = setTimeout(() => controller.abort(), 3000)
       
@@ -50,10 +89,9 @@ async function aiRoutes(fastify, options) {
         return { provider: 'local', models: data.data || [] }
       }
     } catch (e) {
-      // 本地不可用，返回云端模型列表
+      // 本地不可用
     }
     
-    // 返回云端默认模型
     return {
       provider: 'mimo',
       models: [
@@ -64,7 +102,7 @@ async function aiRoutes(fastify, options) {
   })
 
   // ========================================
-  // POST /api/ai/chat - 流式聊天
+  // POST /api/ai/chat - 三阶段 Spatial-RAG 管道
   // ========================================
   fastify.post('/chat', async (request, reply) => {
     const { messages = [], poiFeatures = [], options = {} } = request.body || {}
@@ -73,156 +111,219 @@ async function aiRoutes(fastify, options) {
       return reply.status(400).send({ error: 'messages 参数不能为空' })
     }
 
+    // 获取或创建 RAG 会话
+    const sessionId = options.sessionId || `session_${Date.now()}`
+    let session = ragSessions.get(sessionId)
+    if (!session) {
+      session = createRAGSession()
+      session.createdAt = Date.now()
+      ragSessions.set(sessionId, session)
+    }
+
     // 获取最后一条用户消息
     const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content || ''
-    const isLocationQuery = aiHelpers.isLocationRelatedQuery(lastUserMessage)
-    
-    // 构建上下文和系统提示词（始终发送以维持身份设定）
-    const poiContext = poiFeatures.length > 0 
-      ? aiHelpers.formatPOIContext(poiFeatures, lastUserMessage)
-      : '当前未选中任何 POI 数据。'
-    
-    const systemPrompt = aiHelpers.buildSystemPrompt(poiContext, isLocationQuery)
-    const fullMessages = [{ role: 'system', content: systemPrompt }, ...messages]
-
-    // 选择服务商
-    let apiBase, apiKey, modelId, headers
-    const localApiBase = process.env.LOCAL_LM_API || 'http://localhost:1234/v1'
+    session.setUserQuery(lastUserMessage)
     
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 2000)
-      await fetch(`${localApiBase}/models`, { signal: controller.signal })
-      clearTimeout(timeout)
+      // 动态导入三阶段管道（支持热重载）
+      const { executePipeline } = await import('./spatial-rag-pipeline.js')
       
-      // 使用本地服务
-      apiBase = localApiBase
-      apiKey = 'lm-studio'
-      modelId = 'qwen3-4b-instruct-2507'
-      headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }
-    } catch (e) {
-      // 使用云端服务
-      apiBase = 'https://api.xiaomimimo.com/v1'
-      apiKey = process.env.MIMO_API_KEY
-      modelId = 'mimo-v2-flash'
-      headers = { 'Content-Type': 'application/json', 'api-key': apiKey }
-    }
-
-    if (!apiKey) {
-      return reply.status(500).send({ error: 'AI 服务未配置' })
-    }
-
-    // 构建请求体
-    const requestBody = {
-      model: modelId,
-      messages: fullMessages,
-      temperature: options.temperature ?? 0.7,
-      max_tokens: options.maxTokens ?? 2048,
-      stream: true
-    }
-
-    try {
-      const response = await fetch(`${apiBase}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody)
+      session.log('Pipeline', 'Started', { 
+        userQuery: lastUserMessage.slice(0, 50),
+        poiCount: poiFeatures.length,
+        architecture: 'three-stage'
       })
-
-      if (!response.ok) {
-        const error = await response.text()
-        return reply.status(response.status).send({ error: `AI 请求失败: ${error}` })
-      }
 
       // 设置 SSE 响应头
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-AI-Provider': apiBase.includes('localhost') ? 'local' : 'mimo'
+        'Access-Control-Allow-Origin': '*',
+        'X-Accel-Buffering': 'no' // 禁用 nginx 缓冲
       })
 
-      // 流式转发
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        reply.raw.write(decoder.decode(value, { stream: true }))
+      let fullContent = ''
+      
+      // 执行三阶段管道，传递 session 用于日志记录
+      const pipelineOptions = { ...options, session }
+      for await (const chunk of executePipeline(lastUserMessage, poiFeatures, pipelineOptions)) {
+        if (chunk) {
+          reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
+          fullContent += chunk
+        }
       }
-
+      
+      // 循环结束后，发送最终使用的 POI 数据给前端（用于地图渲染）
+      const finalPOIs = session.getFinalPOIs()
+      if (finalPOIs && finalPOIs.length > 0) {
+        reply.raw.write(`event: pois\n`)
+        reply.raw.write(`data: ${JSON.stringify(finalPOIs)}\n\n`)
+      }
+      
+      // 发送完成标记
+      reply.raw.write('data: [DONE]\n\n')
+      
+      session.log('Pipeline', 'Completed', { 
+        responseLength: fullContent.length,
+        architecture: 'three-stage'
+      })
+      session.markSuccess()
+      session.save()
+      
       reply.raw.end()
-    } catch (error) {
-      fastify.log.error(error)
-      return reply.status(500).send({ error: `服务器错误: ${error.message}` })
+    } catch (err) {
+      console.error('[AI Chat] 管道执行错误:', err)
+      session.log('Pipeline', 'Error', { error: err.message })
+      session.save()
+      
+      if (!reply.raw.headersSent) {
+        return reply.status(500).send({ error: `AI 服务错误: ${err.message}` })
+      }
+      
+      // 如果已经开始流式输出，发送错误信息
+      try {
+        const errorData = JSON.stringify({
+          choices: [{
+            delta: { content: `\n\n⚠️ 发生错误: ${err.message}` },
+            index: 0
+          }]
+        })
+        reply.raw.write(`data: ${errorData}\n\n`)
+        reply.raw.write('data: [DONE]\n\n')
+      } catch {}
+      
+      reply.raw.end()
     }
   })
 
   // ========================================
-  // POST /api/ai/search - 语义搜索
+  // POST /api/ai/plan - 仅执行阶段1（调试用）
+  // ========================================
+  fastify.post('/plan', async (request, reply) => {
+    const { question, context = {} } = request.body || {}
+    
+    if (!question) {
+      return reply.status(400).send({ error: '缺少 question 参数' })
+    }
+    
+    try {
+      const { parseIntent } = await import('./planner.js')
+      const result = await parseIntent(question, context)
+      return result
+    } catch (err) {
+      return reply.status(500).send({ error: err.message })
+    }
+  })
+
+  // ========================================
+  // POST /api/ai/execute - 仅执行阶段2（调试用）
+  // ========================================
+  fastify.post('/execute', async (request, reply) => {
+    const { queryPlan, poiFeatures = [] } = request.body || {}
+    
+    if (!queryPlan) {
+      return reply.status(400).send({ error: '缺少 queryPlan 参数' })
+    }
+    
+    try {
+      const { executeQuery } = await import('./executor.js')
+      const result = await executeQuery(queryPlan, poiFeatures)
+      return result
+    } catch (err) {
+      return reply.status(500).send({ error: err.message })
+    }
+  })
+
+  // ========================================
+  // POST /api/ai/session/end - 结束对话会话
+  // ========================================
+  fastify.post('/session/end', async (request, reply) => {
+    const { sessionId } = request.body || {}
+    
+    if (sessionId && ragSessions.has(sessionId)) {
+      const session = ragSessions.get(sessionId)
+      session.log('Session', 'Ended', { reason: 'user_clear' })
+      session.save()
+      ragSessions.delete(sessionId)
+      return { success: true, message: '会话已结束并保存日志' }
+    }
+    
+    return { success: false, message: '会话不存在' }
+  })
+
+  // ========================================
+  // POST /api/ai/search - 语义搜索（快速模式）
   // ========================================
   fastify.post('/search', async (request, reply) => {
-    const { keyword, poiNames = [], batchIndex = 0 } = request.body || {}
+    const { query, poiFeatures = [] } = request.body || {}
 
-    if (!keyword || !keyword.trim()) {
-      return reply.status(400).send({ error: 'keyword 参数不能为空' })
+    if (!query) {
+      return reply.status(400).send({ error: '缺少 query 参数' })
     }
 
-    if (!poiNames || poiNames.length === 0) {
-      return { matchedNames: [] }
+    // 简单的关键词匹配搜索
+    const keywords = query.toLowerCase().split(/\s+/)
+    
+    const results = poiFeatures.filter(poi => {
+      const props = poi.properties || {}
+      const searchText = `${props['名称'] || ''} ${props['大类'] || ''} ${props['中类'] || ''} ${props['小类'] || ''} ${props['地址'] || ''}`.toLowerCase()
+      return keywords.some(kw => searchText.includes(kw))
+    })
+
+    // 按相关性排序（匹配关键词数量）
+    results.sort((a, b) => {
+      const textA = `${a.properties?.['名称'] || ''} ${a.properties?.['小类'] || ''}`.toLowerCase()
+      const textB = `${b.properties?.['名称'] || ''} ${b.properties?.['小类'] || ''}`.toLowerCase()
+      const scoreA = keywords.filter(kw => textA.includes(kw)).length
+      const scoreB = keywords.filter(kw => textB.includes(kw)).length
+      return scoreB - scoreA
+    })
+
+    return {
+      success: true,
+      query,
+      total: results.length,
+      results: results.slice(0, 50)
     }
+  })
 
-    const apiKey = process.env.MIMO_API_KEY
-    if (!apiKey) {
-      return reply.status(500).send({ error: 'AI 服务未配置' })
-    }
-
-    const kw = keyword.trim()
-    const prompt = `你是一个 POI（兴趣点）语义分析专家。
-
-## 任务
-用户搜索关键词：「${kw}」
-
-以下是 POI 名称列表：
-${poiNames.join('、')}
-
-## 要求
-1. 分析每个 POI 名称，判断其是否与搜索关键词「${kw}」语义相关
-2. 语义相关包括：直接包含关键词、属于该类别的品牌、同义词或近义词
-3. 仅返回相关的 POI 名称，用「|」分隔
-4. 如果没有任何相关的 POI，返回「无」
-5. 禁止输出任何解释，直接返回结果`
-
-    try {
-      const response = await fetch('https://api.xiaomimimo.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'api-key': apiKey },
-        body: JSON.stringify({
-          model: 'mimo-v2-flash',
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.3,
-          max_tokens: 1024,
-          stream: false
-        })
-      })
-
-      if (!response.ok) {
-        const error = await response.text()
-        return reply.status(response.status).send({ error: `AI 请求失败: ${error}` })
-      }
-
-      const data = await response.json()
-      const result = data.choices?.[0]?.message?.content?.trim() || ''
-
-      if (!result || result === '无') {
-        return { matchedNames: [] }
-      }
-
-      const matchedNames = result.split('|').map(n => n.trim()).filter(n => n && n !== '无')
-      return { matchedNames }
-    } catch (error) {
-      fastify.log.error(error)
-      return reply.status(500).send({ error: `服务器错误: ${error.message}` })
+  // ========================================
+  // GET /api/ai/architecture - 获取架构信息
+  // ========================================
+  fastify.get('/architecture', async (request, reply) => {
+    return {
+      name: 'Three-Stage Spatial-RAG Pipeline',
+      version: '2.0.0',
+      stages: [
+        {
+          name: 'Planner',
+          type: 'LLM',
+          description: '将用户问题转换为结构化 QueryPlan JSON',
+          tokenBudget: '< 500 tokens',
+          dataAccess: 'None (不访问 POI 数据)'
+        },
+        {
+          name: 'Executor',
+          type: 'Backend',
+          description: '执行空间查询、语义精排、区域统计',
+          tokenBudget: '0 tokens',
+          dataAccess: 'PostGIS + Milvus + Graph DB'
+        },
+        {
+          name: 'Writer',
+          type: 'LLM',
+          description: '基于压缩结果生成自然语言回答',
+          tokenBudget: '< 2000 tokens',
+          dataAccess: '压缩后的结果 JSON (≤30 POIs)'
+        }
+      ],
+      benefits: [
+        'Token 消耗可控 (< 2500/请求)',
+        'LLM 不做数据库该做的事',
+        '支持复杂空间查询',
+        '可扩展图推理能力'
+      ]
     }
   })
 }

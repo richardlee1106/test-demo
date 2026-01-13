@@ -114,7 +114,16 @@ export function buildSystemPrompt(poiContext, isLocationQuery = false) {
  * @param {Array} poiFeatures - POI 数据（将发送到后端处理）
  * @returns {Promise<string>} 完整的 AI 回复
  */
-export async function sendChatMessageStream(messages, onChunk, options = {}, poiFeatures = []) {
+/**
+ * 发送聊天请求（流式）- 调用后端 API
+ * @param {Array} messages - 消息历史
+ * @param {Function} onChunk - 每次收到新内容时的回调 (text: string) => void
+ * @param {Object} options - 可选配置
+ * @param {Array} poiFeatures - POI 数据（将发送到后端处理）
+ * @param {Function} onMeta - [新增] 接收元数据的回调 (type: string, data: any) => void
+ * @returns {Promise<string>} 完整的 AI 回复
+ */
+export async function sendChatMessageStream(messages, onChunk, options = {}, poiFeatures = [], onMeta = null) {
   console.log('[AI Frontend] 调用后端 API，POI 数量:', poiFeatures.length)
 
   const response = await fetch(`${API_BASE}/chat`, {
@@ -145,6 +154,7 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
   const decoder = new TextDecoder()
   let fullContent = ''
   let buffer = ''
+  let currentEvent = null // 跟踪当前 SSE 事件类型
 
   while (true) {
     const { done, value } = await reader.read()
@@ -155,45 +165,58 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
     buffer = lines.pop() || ''
 
     for (const line of lines) {
-      // 调试：打印原始行
-      // console.log('[AI Stream Raw]', line)
+      if (!line.trim()) continue // 跳过空行
+
+      if (line.startsWith('event: ')) {
+        currentEvent = line.slice(7).trim()
+        continue
+      }
 
       if (line.startsWith('data: ')) {
         const data = line.slice(6).trim()
         if (data === '[DONE]') continue
 
         try {
+          if (currentEvent === 'pois') {
+             const pois = JSON.parse(data)
+             console.log('[AI Frontend] 收到后端下发的 POI 数据:', pois.length)
+             if (onMeta) onMeta('pois', pois)
+             currentEvent = null
+             continue
+          }
+
+          // 默认为 message chunk
           const parsed = JSON.parse(data)
-          // 兼容不同的 OpenAIChat 格式
+          
+          // 如果后端直接发的 { content: '...' } 格式 (index.js 修改后)
+          if (parsed.content !== undefined) {
+             const delta = parsed.content
+             fullContent += delta
+             onChunk(delta)
+             continue
+          }
+
+          // 兼容 OpenAI 格式
           const choice = parsed.choices?.[0]
           const delta = choice?.delta?.content || choice?.text || ''
           
-          // 特殊处理：有些推理引擎可能返回空 delta 但有 finish_reason
-          if (choice?.finish_reason) {
-             // 结束
-          }
-
           if (delta) {
              fullContent += delta
              onChunk(delta)
-          } else {
-             // 尝试检查是否包含错误信息
-             if (parsed.error) {
-                console.error('[AI Stream Error]', parsed.error)
-                onChunk(`\n[系统错误: ${parsed.error.message || '未知错误'}]\n`)
-             }
+          } else if (parsed.error) {
+             console.error('[AI Stream Error]', parsed.error)
+             onChunk(`\n[系统错误: ${parsed.error.message || '未知错误'}]\n`)
           }
         } catch (e) {
-          // 如果解析失败，可能是非 JSON 格式的 raw text（罕见情况）
           console.warn('[AI Stream Parse Error]', e, line)
         }
+        // 重置 event（通常 event 只对下一行 data 有效）
+        currentEvent = null
       }
     }
   }
 
-  // 过滤 Qwen3 的思考标签内容
   fullContent = fullContent.replace(/<think>[\s\S]*?<\/think>/g, '').trim()
-  
   return fullContent
 }
 
@@ -218,70 +241,70 @@ export async function sendChatMessage(messages, options = {}) {
  * @param {Object} options - 可选配置
  * @returns {Promise<Array>} 语义相关的 POI 数组
  */
-export async function semanticSearch(keyword, features, options = {}) {
-  if (!keyword || !keyword.trim() || !features || features.length === 0) {
+/**
+ * 语义搜索 - 调用后端 Spatial RAG
+ * 改为使用全域感知搜索，不再局限于前端已加载的数据
+ * @param {string} keyword - 用户搜索关键词
+ * @param {Array} features - (已弃用，保留参数兼容性)
+ * @param {Object} options - 可选配置 { spatialContext: ... }
+ * @returns {Promise<Array>} 语义相关的 POI 数组
+ */
+export async function semanticSearch(keyword, features = [], options = {}) {
+  if (!keyword || !keyword.trim()) {
     return []
   }
 
   const kw = keyword.trim()
-  
-  // 提取所有 POI 名称
-  const poiNames = features.map(f => {
-    return f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? ''
-  }).filter(name => name)
+  console.log(`[AI Search] 全域语义搜索: "${kw}"`)
 
-  // 分批处理
-  const BATCH_SIZE = 200
-  const batches = []
-  for (let i = 0; i < poiNames.length; i += BATCH_SIZE) {
-    batches.push(poiNames.slice(i, i + BATCH_SIZE))
-  }
+  let matchedPOIs = []
 
-  console.log(`[AI Search] 关键词: "${kw}", 共 ${poiNames.length} 个 POI, 分 ${batches.length} 批处理`)
-
-  // 收集所有匹配的名称
-  const matchedNames = new Set()
-
-  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-    const batch = batches[batchIndex]
-    
-    try {
-      const response = await fetch(`${API_BASE}/search`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          keyword: kw,
-          poiNames: batch,
-          batchIndex
-        })
-      })
-
-      if (!response.ok) {
-        console.error(`[AI Search] 批次 ${batchIndex + 1} 失败:`, response.status)
-        continue
+  // 复用 RAG 管道进行搜索
+  await sendChatMessageStream(
+    [{ role: 'user', content: kw }],
+    (chunk) => {
+       // 忽略文本响应流，只关注结果
+    }, 
+    {
+      ...options,
+      isSearchOnly: true // 标记为纯搜索模式
+    },
+    [], // 不传前端 POI，强制走后端检索
+    (type, data) => {
+      if (type === 'pois' && Array.isArray(data)) {
+         matchedPOIs = data;
       }
-
-      const result = await response.json()
-      if (result.matchedNames) {
-        result.matchedNames.forEach(name => matchedNames.add(name))
-      }
-
-      console.log(`[AI Search] 批次 ${batchIndex + 1}/${batches.length} 完成，当前匹配 ${matchedNames.size} 个`)
-    } catch (error) {
-      console.error(`[AI Search] 批次 ${batchIndex + 1} 失败:`, error)
     }
-  }
+  )
 
-  // 根据匹配的名称过滤原始 features
-  const matchedFeatures = features.filter(f => {
-    const name = f?.properties?.['名称'] ?? f?.properties?.name ?? f?.properties?.Name ?? ''
-    return matchedNames.has(name)
-  })
-
-  console.log(`[AI Search] 最终匹配 ${matchedFeatures.length} 个 POI`)
-  return matchedFeatures
+  console.log(`[AI Search] 搜索完成，找到 ${matchedPOIs.length} 个结果`)
+  
+  // 转换为 GeoJSON Feature 格式 (如果后端返回的是 raw object)
+  return matchedPOIs.map(p => {
+    // 如果已经是 Feature 结构就不动，否则包装一下
+    if (p.type === 'Feature') {
+        // 确保颜色正确
+        if (!p.properties) p.properties = {};
+        p.properties._groupIndex = options.colorIndex !== undefined ? options.colorIndex : 0;
+        return p;
+    }
+    
+    return {
+       type: 'Feature',
+       properties: {
+          id: p.id,
+          '名称': p.name,
+          '小类': p.category,
+          '地址': p.address,
+          // 0 = 红色(默认), 4 = 紫色(AI推荐)
+          _groupIndex: options.colorIndex !== undefined ? options.colorIndex : 0 
+       },
+       geometry: {
+          type: 'Point',
+          coordinates: [p.lon, p.lat]
+       }
+    }
+  });
 }
 
 /**

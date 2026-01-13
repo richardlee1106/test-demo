@@ -77,10 +77,28 @@
           </svg>
         </div>
         <div class="message-content">
-          <div class="typing-indicator">
-            <span></span><span></span><span></span>
+          <div class="thinking-indicator">
+            <span class="thinking-text">Spatial-RAG正在思考和检索...</span>
+            <div class="typing-indicator">
+              <span></span><span></span><span></span>
+            </div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- AI 提取的 POI 操作区域 -->
+    <div v-if="extractedPOIs.length > 0" class="extracted-pois-area">
+      <div class="extracted-pois-header">
+        <span class="extracted-pois-icon">📍</span>
+        <span>AI 检索到 {{ extractedPOIs.length }} 个 POI</span>
+        <button class="render-tagcloud-btn" @click="renderToTagCloud">
+          渲染到标签云
+        </button>
+        <button class="clear-extracted-btn" @click="clearExtractedPOIs">清除</button>
+      </div>
+      <div class="extracted-pois-preview">
+        {{ extractedPOIs.slice(0, 5).map(p => p.name).join('、') }}{{ extractedPOIs.length > 5 ? '...' : '' }}
       </div>
     </div>
 
@@ -127,11 +145,34 @@ const props = defineProps({
   poiFeatures: {
     type: Array,
     default: () => []
+  },
+  // 是否开启全域感知模式
+  globalAnalysisEnabled: {
+    type: Boolean,
+    default: false
+  },
+  // 空间边界几何数据
+  boundaryPolygon: {
+    type: Array,
+    default: null
+  },
+  drawMode: {
+    type: String,
+    default: ''
+  },
+  circleCenter: {
+    type: Object,
+    default: null
+  },
+  // 地图视野边界 [minLon, minLat, maxLon, maxLat]
+  mapBounds: {
+    type: Array,
+    default: null
   }
 });
 
 // 定义事件
-const emit = defineEmits(['close']);
+const emit = defineEmits(['close', 'render-to-tagcloud']);
 
 // 响应式状态
 const messages = ref([]);
@@ -140,6 +181,7 @@ const isTyping = ref(false);
 const isOnline = ref(false);
 const messagesContainer = ref(null);
 const inputRef = ref(null);
+const extractedPOIs = ref([]); // AI 提取的 POI 名称列表
 
 // 计算 POI 数量
 const poiCount = computed(() => props.poiFeatures?.length || 0);
@@ -213,15 +255,37 @@ async function sendMessage() {
       timestamp: Date.now()
     });
 
-    // 流式接收响应 - POI 数据发送到后端处理
+    // 流式接收响应 - POI 数据和选项发送到后端处理
+    // 收集对话上下文及空间约束
+    const options = {
+      globalAnalysis: props.globalAnalysisEnabled,
+      // 传递具体的边界原始数据，让后端 Executor 做硬过滤
+      spatialContext: {
+        boundary: props.boundaryPolygon,
+        mode: props.drawMode,
+        center: props.circleCenter,
+        viewport: props.mapBounds
+      }
+    };
+
+    // 发送请求给后端 AI Pipeline
     await sendChatMessageStream(
       apiMessages, 
       (chunk) => {
         messages.value[aiMessageIndex].content += chunk;
         scrollToBottom();
       },
-      {}, // options
-      props.poiFeatures // POI 数据发送到后端
+      options, // 传递全域感知开关状态和空间上下文
+      props.poiFeatures, // POI 数据发送到后端
+      // 接收元数据回调
+      (type, data) => {
+        if (type === 'pois' && Array.isArray(data)) {
+           console.log('[AiChat] 收到后端结构化 POI 数据:', data.length);
+           // 保存带有坐标的完整 POI 数据
+           extractedPOIs.value = data;
+           // 标记为已从后端获取，防止被 markdown由于解析覆盖（虽然 watch 还是会跑，但我们可以改进 watch）
+        }
+      }
     );
 
   } catch (error) {
@@ -247,6 +311,7 @@ function sendQuickAction(prompt) {
 // 清空对话
 function clearChat() {
   messages.value = [];
+  extractedPOIs.value = [];
 }
 
 // 保存对话记录
@@ -407,6 +472,112 @@ function generateTableHTML(tableLines) {
   return html;
 }
 
+/**
+ * 从 AI 回复中提取 POI 名称（解析 Markdown 表格）
+ * @param {string} content - AI 回复内容
+ * @returns {Array} POI 列表 [{name, distance}, ...]
+ */
+function extractPOIsFromResponse(content) {
+  const pois = [];
+  if (!content) return pois;
+  
+  const lines = content.split('\n');
+  let inTable = false;
+  let nameColIndex = -1;
+  let distanceColIndex = -1;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    
+    // 检测表格行
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      const cells = trimmed.split('|').filter((c, i, arr) => i !== 0 && i !== arr.length - 1).map(c => c.trim());
+      
+      // 检查是否是分隔行
+      if (/^[\s\-:|]+$/.test(cells.join(''))) {
+        continue;
+      }
+      
+      // 检查是否是表头（寻找"名称"列）
+      if (!inTable) {
+        nameColIndex = cells.findIndex(c => c.includes('名称') || c.includes('店名') || c.includes('POI'));
+        distanceColIndex = cells.findIndex(c => c.includes('距离'));
+        if (nameColIndex >= 0) {
+          inTable = true;
+        }
+        continue;
+      }
+      
+      // 表格数据行
+      if (inTable && nameColIndex >= 0 && cells[nameColIndex]) {
+        const name = cells[nameColIndex].replace(/\*\*/g, '').trim();
+        const distance = distanceColIndex >= 0 ? cells[distanceColIndex]?.trim() : null;
+        if (name && !name.includes('---')) {
+          pois.push({ name, distance });
+        }
+      }
+    } else {
+      // 非表格行，重置状态
+      if (inTable && pois.length > 0) {
+        // 表格已结束
+      }
+    }
+  }
+  
+  return pois;
+}
+
+/**
+ * 将 AI 提取的 POI 渲染到标签云
+ */
+function renderToTagCloud() {
+  // 如果提取的数据里包含坐标信息，说明是后端下发的结构化数据，直接作为 Feature 数组传出去
+  if (extractedPOIs.value.length > 0 && extractedPOIs.value[0].lon) {
+     const features = extractedPOIs.value.map(p => ({
+        type: 'Feature',
+        properties: {
+           id: p.id || `temp_${Math.random()}`,
+           '名称': p.name,
+           '小类': p.category,
+           '地址': p.address,
+           '_is_temp': true // 标记为临时数据
+        },
+        geometry: {
+           type: 'Point',
+           coordinates: [p.lon, p.lat]
+        }
+     }));
+     console.log('[AiChat] 渲染结构化 POI 到标签云:', features.length);
+     emit('render-to-tagcloud', features);
+     return;
+  }
+
+  const poiNames = extractedPOIs.value.map(p => p.name);
+  console.log('[AiChat] 渲染到标签云:', poiNames);
+  emit('render-to-tagcloud', poiNames);
+}
+
+/**
+ * 清除提取的 POI
+ */
+function clearExtractedPOIs() {
+  extractedPOIs.value = [];
+}
+
+// 监听消息变化，自动提取 POI
+watch(messages, (newMessages) => {
+  if (newMessages.length > 0) {
+    const lastMsg = newMessages[newMessages.length - 1];
+    if (lastMsg.role === 'assistant' && lastMsg.content) {
+      const pois = extractPOIsFromResponse(lastMsg.content);
+      if (pois.length > 0) {
+        extractedPOIs.value = pois;
+        console.log('[AiChat] 提取到 POI:', pois);
+      }
+    }
+  }
+}, { deep: true });
+
 // 监听 POI 数据变化，提示用户
 watch(() => props.poiFeatures, (newVal, oldVal) => {
   if (newVal?.length > 0 && newVal.length !== oldVal?.length) {
@@ -532,10 +703,10 @@ defineExpose({
 
 /* 操作按钮通用样式 */
 .action-btn {
-  padding: 6px 12px;
+  padding: 8px 14px;
   border: none;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
@@ -897,6 +1068,33 @@ defineExpose({
   40% { transform: scale(1); opacity: 1; }
 }
 
+/* 思考中指示器 */
+.thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: rgba(55, 65, 81, 0.6);
+  border-radius: 16px;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  animation: pulse-border 2s infinite;
+}
+
+.thinking-text {
+  font-size: 14px;
+  color: #a5b4fc;
+  font-weight: 500;
+}
+
+.thinking-indicator .typing-indicator {
+  padding: 0;
+}
+
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(99, 102, 241, 0.3); }
+  50% { border-color: rgba(99, 102, 241, 0.6); }
+}
+
 /* 输入区域 */
 .chat-input-area {
   padding: 12px 16px 16px;
@@ -971,6 +1169,83 @@ defineExpose({
 
 .offline-hint {
   color: #f87171;
+}
+
+/* AI 提取的 POI 区域 */
+.extracted-pois-area {
+  padding: 10px 16px;
+  background: rgba(16, 185, 129, 0.08);
+  border-top: 1px solid rgba(16, 185, 129, 0.2);
+  border-bottom: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.extracted-pois-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #10b981;
+}
+
+.extracted-pois-icon {
+  font-size: 14px;
+}
+
+.clear-extracted-btn {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 4px;
+  color: #f87171;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.clear-extracted-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.5);
+}
+
+.render-tagcloud-btn, .clear-extracted-btn {
+  margin-left: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.render-tagcloud-btn {
+  margin-left: auto; /* Keep it pushed to the right if flex container allows, or this might conflict with previous margin-left */
+  background: linear-gradient(135deg, #10b981, #06b6d4);
+  color: white;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+}
+
+.render-tagcloud-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.4);
+}
+
+.clear-extracted-btn {
+  background: rgba(107, 114, 128, 0.2);
+  color: #d1d5db;
+}
+
+.clear-extracted-btn:hover {
+  background: rgba(107, 114, 128, 0.4);
+  color: white;
+}
+
+.extracted-pois-preview {
+  font-size: 12px;
+  color: #6ee7b7;
+  line-height: 1.4;
+  word-break: break-all;
 }
 
 /* 移动端适配 */

@@ -1,7 +1,7 @@
 {
   "name": "vite-project",
   "private": true,
-  "version": "3.2.0",
+  "version": "4.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,9 @@
     "@luma.gl/core": "^9.2.5",
     "@luma.gl/webgl": "^9.2.5",
     "@mdi/font": "^7.4.47",
+    "@turf/boolean-point-in-polygon": "^7.3.1",
+    "@turf/centroid": "^7.3.1",
+    "@turf/helpers": "^7.3.1",
     "@types/d3": "^7.4.3",
     "axios": "^1.13.2",
     "d3": "^7.9.0",

@@ -2,6 +2,12 @@
   <div class="map-wrapper">
     <div ref="mapContainer" class="map-container"></div>
     
+    <!-- POI 名称气泡 -->
+    <div ref="poiPopup" class="poi-popup" v-show="popupVisible">
+      <div class="popup-content">{{ popupName }}</div>
+      <div class="popup-arrow"></div>
+    </div>
+    
     <!-- 实时过滤 & 热力图控制 -->
     <div class="map-filter-control">
       <div class="control-row">
@@ -57,6 +63,22 @@
           inactive-text="关闭"
         />
       </div>
+      
+      <!-- 全域感知控件（Spatial-RAG 增强）- 仅示意 -->
+      <div class="control-divider"></div>
+      <div class="control-row">
+        <span class="filter-label">全域感知</span>
+        <el-switch 
+          :model-value="true"
+          disabled
+          inline-prompt
+          active-text="开启"
+          inactive-text=""
+        />
+      </div>
+      <div class="control-hint">
+        <span>Spatial-RAG 全域感知已启用</span>
+      </div>
     </div>
     
     <!-- 权重选择弹窗 -->
@@ -106,6 +128,7 @@ import { Vector as VectorLayer } from 'ol/layer';
 import { Draw } from 'ol/interaction';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
+import Polygon from 'ol/geom/Polygon';
 import { fromLonLat, toLonLat } from 'ol/proj';
 import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape } from 'ol/style';
 
@@ -125,7 +148,7 @@ import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
  * toggle-overlay: 当切换叠加模式时触发
  * weight-change: 当权重设置变化时触发
  */
-const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay', 'weight-change']);
+const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay', 'weight-change', 'global-analysis-change']);
 
 /**
  * 定义组件属性
@@ -158,6 +181,11 @@ const showWeightValue = ref(false); // 显示权重值开关
 const weightDialogVisible = ref(false); // 权重选择弹窗
 const selectedWeightType = ref('population'); // 选中的权重类型
 const weightLoading = ref(false); // 权重加载中
+
+// ============ POI 名称气泡 ============
+const poiPopup = ref(null); // 气泡 DOM 引用
+const popupVisible = ref(false); // 气泡是否可见
+const popupName = ref(''); // 气泡显示的名称
 
 // 权重选项
 const weightOptions = ref([
@@ -201,6 +229,7 @@ function handleWeightToggle(val) {
 function handleShowWeightToggle(val) {
   emit('weight-change', { enabled: weightEnabled.value, showValue: val });
 }
+
 
 /**
  * 取消权重选择弹窗
@@ -583,7 +612,7 @@ const emitHover = debounce((feature) => {
 
 /**
  * 地图点击处理
- * 使用 deck.gl pickObject 检测高亮点
+ * 使用 deck.gl pickObject 检测高亮点，并显示 POI 名称气泡
  */
 function onMapClick(evt) {
   const pixel = map.value.getEventPixel(evt.originalEvent);
@@ -613,7 +642,48 @@ function onMapClick(evt) {
   if (foundRaw) {
     console.log('[MapContainer] 点击了要素:', foundRaw);
     emit('click-feature', foundRaw);
+    
+    // 显示 POI 名称气泡
+    showPoiPopup(foundRaw, evt.originalEvent);
+  } else {
+    // 点击空白处关闭气泡
+    hidePoiPopup();
   }
+}
+
+/**
+ * 显示 POI 名称气泡
+ */
+function showPoiPopup(feature, event) {
+  const props = feature.properties || feature;
+  const name = props['名称'] || props.name || '未知名称';
+  
+  popupName.value = name;
+  popupVisible.value = true;
+  
+  // 定位气泡到点击位置
+  nextTick(() => {
+    if (poiPopup.value) {
+      const mapRect = mapContainer.value.getBoundingClientRect();
+      const x = event.clientX - mapRect.left;
+      const y = event.clientY - mapRect.top;
+      
+      poiPopup.value.style.left = `${x}px`;
+      poiPopup.value.style.top = `${y - 10}px`; // 稍微向上偏移
+    }
+  });
+  
+  // 3秒后自动关闭
+  setTimeout(() => {
+    hidePoiPopup();
+  }, 3000);
+}
+
+/**
+ * 隐藏 POI 名称气泡
+ */
+function hidePoiPopup() {
+  popupVisible.value = false;
 }
 
 /**
@@ -914,6 +984,33 @@ function showHighlights(features, options = {}) {
   heatmapData.value = deckData;
   
   console.log(`[MapContainer] deck.gl 数据更新: ${deckData.length} 个点`);
+  
+  // 自动缩放视图以包含所有点
+  if (options.fitView && map.value) {
+    // 计算边界
+    let minLon = 180, maxLon = -180, minLat = 90, maxLat = -90;
+    deckData.forEach(d => {
+      minLon = Math.min(minLon, d.lon);
+      maxLon = Math.max(maxLon, d.lon);
+      minLat = Math.min(minLat, d.lat);
+      maxLat = Math.max(maxLat, d.lat);
+    });
+    
+    // 如果有效
+    if (minLon <= maxLon && minLat <= maxLat) {
+      // 转换为 Web Mercator 投影
+      const extent = [
+        ...fromLonLat([minLon, minLat]),
+        ...fromLonLat([maxLon, maxLat])
+      ];
+      
+      map.value.getView().fit(extent, {
+        padding: [50, 50, 50, 50],
+        duration: 800,
+        maxZoom: 16
+      });
+    }
+  }
 }
 
 // 监听热力图开关
@@ -1006,8 +1103,57 @@ function clearPolygon() {
   currentLocatedPoi = null; // 清空当前定位的 POI
 }
 
+/**
+ * 添加上传的多边形到地图
+ * @param {Array} coordinates - GeoJSON 格式的多边形坐标数组 [[lng, lat], ...]
+ */
+function addUploadedPolygon(coordinates) {
+  // 清除之前的多边形
+  clearPolygon();
+  
+  // 将 GeoJSON 坐标转换为 OpenLayers 多边形
+  const olCoords = coordinates.map(coord => fromLonLat(coord));
+  const geometry = new Polygon([olCoords]);
+  
+  // 创建多边形要素
+  const polygonFeature = new Feature({
+    geometry: geometry
+  });
+  
+  // 设置样式（与绘制的多边形样式一致）
+  polygonFeature.setStyle(new Style({
+    fill: new Fill({
+      color: 'rgba(0, 123, 255, 0.2)'
+    }),
+    stroke: new Stroke({
+      color: '#007bff',
+      width: 2,
+      lineDash: [5, 5]
+    })
+  }));
+  
+  // 添加到图层
+  polygonLayerSource.addFeature(polygonFeature);
+  
+  // 关键：设置当前几何状态，以便后续数据更新时能自动筛选
+  currentGeometry = geometry;
+  currentGeometryType = 'Polygon';
+  
+  // 立即触发一次筛选和高亮
+  onPolygonComplete(geometry);
+  
+  // 缩放到多边形范围
+  const extent = geometry.getExtent();
+  map.value.getView().fit(extent, {
+    padding: [50, 50, 50, 50],
+    duration: 500
+  });
+  
+  console.log('[MapContainer] 已添加上传的多边形并触发筛选');
+}
+
 // 暴露给父组件的方法
-defineExpose({ map, openPolygonDraw, closePolygonDraw, showHighlights, clearHighlights, clearPolygon, flyTo });
+defineExpose({ map, openPolygonDraw, closePolygonDraw, showHighlights, clearHighlights, clearPolygon, flyTo, addUploadedPolygon });
 
 // --- WGS84 转 GCJ-02 工具函数 ---
 // (近似算法，仅中国区域有效)
@@ -1098,8 +1244,10 @@ function transformLon(x, y) {
 .control-divider {
   width: 100%;
   height: 1px;
-  background-color: #e0e0e0;
-  margin: 4px 0;
+  background: linear-gradient(90deg, transparent, #d0d0d0, transparent);
+  margin: 8px 0;
+  border: none;
+  flex-shrink: 0;
 }
 
 .weight-dialog-content {
@@ -1110,6 +1258,69 @@ function transformLon(x, y) {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+/* 全域感知提示样式 */
+.control-hint {
+  font-size: 11px;
+  color: #67c23a;
+  padding: 4px 0 0 0;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.control-hint span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* POI 名称气泡样式 */
+.poi-popup {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  animation: popupFadeIn 0.2s ease-out;
+}
+
+.popup-content {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.popup-arrow {
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-top: 8px solid #16213e;
+  margin: 0 auto;
+}
+
+@keyframes popupFadeIn {
+  from { 
+    opacity: 0; 
+    transform: translate(-50%, -90%); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translate(-50%, -100%); 
+  }
 }
 
 @media (max-width: 768px) {

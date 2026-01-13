@@ -30,6 +30,7 @@
         >
           {{ hasSearchResult ? '清除查询结果' : '语义查询' }}
         </button>
+        <!-- 右侧移动过来的保存按钮 -->
         <button class="save-btn desktop-save-btn" @click="handleSaveResult">保存筛选结果</button>
       </div>
     </div>
@@ -110,6 +111,9 @@
         <div class="menu-item" v-else @click="stopDraw">
           <span>停止绘制</span>
         </div>
+        <div class="menu-item" v-if="!drawEnabled" @click="triggerVectorUploadMobile">
+          <span>上传选区</span>
+        </div>
 
         <div class="menu-divider"></div>
         <div class="menu-item" @click="run">
@@ -143,6 +147,19 @@
       <button v-else @click="stopDraw" class="warning-btn desktop-btn control-btn">
         停止绘制
       </button>
+      
+      <!-- 上传矢量面文件按钮 -->
+      <input 
+        type="file" 
+        ref="vectorFileInput" 
+        @change="handleVectorFileUpload" 
+        accept=".geojson,.json,.shp,.zip"
+        style="display: none;"
+      />
+      <button @click="triggerVectorUpload" class="upload-btn desktop-btn control-btn">
+        上传选区
+      </button>
+      
       <button @click="run" class="success-btn desktop-btn control-btn">
         渲染标签云
       </button>
@@ -158,7 +175,7 @@ import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded']);
 // const selectedGroup = ref(''); // Replace with array path
 const selectedCategoryPath = ref([]);
 const drawEnabled = ref(false);
@@ -417,6 +434,79 @@ const setSearching = (val) => {
   isSearching.value = val;
 };
 
+// ============ 上传矢量面文件功能 ============
+const vectorFileInput = ref(null);
+
+// 触发文件选择
+const triggerVectorUpload = () => {
+  vectorFileInput.value?.click();
+};
+
+// 移动端触发上传
+const triggerVectorUploadMobile = () => {
+  showMobileMenu.value = false;
+  triggerVectorUpload();
+};
+
+// 处理矢量文件上传
+const handleVectorFileUpload = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  
+  const fileName = file.name.toLowerCase();
+  
+  try {
+    emit('loading-change', true);
+    
+    let geojsonData = null;
+    
+    if (fileName.endsWith('.geojson') || fileName.endsWith('.json')) {
+      // 处理 GeoJSON 文件
+      const text = await file.text();
+      geojsonData = JSON.parse(text);
+    } else if (fileName.endsWith('.zip') || fileName.endsWith('.shp')) {
+      // Shapefile 需要 shpjs 库解析
+      ElMessage.warning('Shapefile 支持正在开发中，请暂时使用 GeoJSON 格式');
+      event.target.value = '';
+      emit('loading-change', false);
+      return;
+    } else {
+      ElMessage.error('不支持的文件格式，请上传 .geojson 文件');
+      event.target.value = '';
+      emit('loading-change', false);
+      return;
+    }
+    
+    // 验证是否为面要素
+    const features = geojsonData.features || (geojsonData.type === 'Feature' ? [geojsonData] : []);
+    const polygonFeatures = features.filter(f => 
+      f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon'
+    );
+    
+    if (polygonFeatures.length === 0) {
+      ElMessage.error('上传的文件中没有找到面要素（Polygon），请确保文件包含多边形数据');
+      event.target.value = '';
+      emit('loading-change', false);
+      return;
+    }
+    
+    // 只取第一个面要素作为选区
+    const firstPolygon = polygonFeatures[0];
+    
+    // 发射事件，让父组件处理选区
+    emit('vector-polygon-uploaded', firstPolygon);
+    
+    ElMessage.success(`已加载选区（${polygonFeatures.length} 个面要素，使用第一个）`);
+    
+  } catch (error) {
+    console.error('解析矢量文件失败:', error);
+    ElMessage.error('解析文件失败：' + error.message);
+  } finally {
+    event.target.value = ''; // 清空 input 以便再次选择同一文件
+    emit('loading-change', false);
+  }
+};
+
 defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* const debugShow = () => {
@@ -604,7 +694,7 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* 通用按钮基础样式 (用于保持一致性) */
 /* 通用按钮基础样式 (用于保持一致性) */
-.primary-btn, .warning-btn, .success-btn, .info-btn, .save-btn {
+.primary-btn, .warning-btn, .success-btn, .info-btn, .save-btn, .upload-btn {
   flex-shrink: 0;
   border: none;
   border-radius: 4px;
@@ -662,6 +752,21 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 .info-btn:hover {
   transform: translateY(-1px);
   box-shadow: 0 2px 8px rgba(144, 147, 153, 0.4);
+}
+
+/* 上传按钮 - 紫色渐变 */
+.upload-btn {
+  background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+}
+
+.upload-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(155, 89, 182, 0.5);
+}
+
+.upload-btn:active {
+  transform: translateY(0);
+  opacity: 0.9;
 }
 
 /* 选择器 UI 优化 (高级感) */

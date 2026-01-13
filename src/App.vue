@@ -8,6 +8,7 @@
                       @data-loaded="handleDataLoaded"
                       @search="handleSearch"
                       @clear-search="handleClearSearch"
+                      @save-result="handleSaveResult"
                       @loading-change="isLoading = $event" />
       </div>
       <div class="header-right">
@@ -17,6 +18,7 @@
                       @debug-show="handleDebugShow"
                       @reset="handleReset"
                       @save-result="handleSaveResult"
+                      @vector-polygon-uploaded="handleVectorPolygonUploaded"
                       :on-run-algorithm="handleRunAlgorithm" />
       </div>
     </header>
@@ -56,7 +58,8 @@
                           @map-move-end="handleMapMoveEnd"
                           @toggle-filter="handleToggleFilter"
                           @toggle-overlay="handleToggleOverlay"
-                          @weight-change="handleWeightChange" />
+                          @weight-change="handleWeightChange"
+                          @global-analysis-change="handleGlobalAnalysisChange" />
           </div>
         </div>
         
@@ -102,7 +105,15 @@
       <!-- 右侧面板：AI 对话（使用 v-show 保持状态） -->
       <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: `${100 - aiSplitPercent}%` }">
         <div class="panel-content">
-          <AiChat ref="aiChatRef" :poi-features="selectedFeatures" @close="toggleAiPanel" />
+          <AiChat ref="aiChatRef" 
+                  :poi-features="selectedFeatures" 
+                  :boundary-polygon="selectedPolygon"
+                  :draw-mode="selectedDrawMode"
+                  :circle-center="circleCenterGeo"
+                  :map-bounds="mapBounds"
+                  :global-analysis-enabled="globalAnalysisEnabled"
+                  @close="toggleAiPanel"
+                  @render-to-tagcloud="handleRenderAIResult" />
         </div>
       </section>
     </main>
@@ -247,6 +258,9 @@ const overlayEnabled = ref(false);
 const weightEnabled = ref(false); // 是否启用权重渲染
 const showWeightValue = ref(false); // 是否显示权重值
 
+// 全域感知模式（开启后 AI 将综合分析所有类别 POI）
+const globalAnalysisEnabled = ref(false);
+
 /**
  * 节流函数工具
  * 用于限制高频事件（如地图移动）的触发频率
@@ -332,19 +346,22 @@ const handleDataLoaded = (payload) => {
       // 覆盖模式：替换所有
       activeGroups.value = [newGroup];
     } else {
-      // 叠加模式：追加（不再限制数量）
-      // 检查是否已存在
+      // 叠加模式：追加
       const exists = activeGroups.value.find(g => g.name === payload.name);
       if (!exists) {
         activeGroups.value.push(newGroup);
       } else {
-        // 更新已存在的
         Object.assign(exists, newGroup);
       }
     }
     
     updateAllPoiFeatures();
-    console.log(`[App] 数据已加载: 当前 ${activeGroups.value.length} 个分组`);
+    
+    // 注意：这里只加载数据，不自动渲染红点
+    // 用户需要通过绘制选区来触发 POI 渲染
+    // 这符合原始设计：选择器选择类别 → 加载数据 → 绘制选区 → 渲染选区内 POI
+    
+    console.log(`[App] 数据已加载: 当前 ${activeGroups.value.length} 个分组，共 ${allPoiFeatures.value.length} 个 POI (未渲染，等待选区)`);
   }
 };
 
@@ -356,15 +373,14 @@ function updateAllPoiFeatures() {
   activeGroups.value.forEach((group, index) => {
     // 为每个 feature 添加 _groupIndex 属性
     const taggedFeatures = group.features.map(f => {
-      // 浅拷贝 feature 以避免修改原始数据（如果需要多次使用）
-      // 但这里为了性能直接修改 properties 也可以，或者使用 Object.create
-      // 为了安全，最好是克隆 properties
       const newProps = { ...f.properties, _groupIndex: index };
       return { ...f, properties: newProps };
     });
     merged = merged.concat(taggedFeatures);
   });
   allPoiFeatures.value = merged;
+  
+  // MapContainer 组件会自动监听 poiFeatures 变化并根据当前 geometry 重新筛选
 }
 
 const handleToggleOverlay = (val) => {
@@ -411,6 +427,8 @@ async function handleWeightChange(payload) {
   }
 }
 
+
+
 const handleSearch = async (keyword) => {
   if (!keyword || !keyword.trim()) {
     // 恢复显示所有选中点
@@ -427,12 +445,23 @@ const handleSearch = async (keyword) => {
   ElMessage.info('正在进行 AI 语义搜索，请稍候...');
   
   try {
-    // 调用 AI 语义搜索
-    const filtered = await semanticSearch(keyword.trim(), selectedFeatures.value);
+    // 调用 AI 语义搜索 (传入当前空间上下文)
+    // 优先使用绘制/上传的多边形选区，其次是当前地图视野
+    const spatialContext = {
+      viewport: mapBounds.value,
+      boundary: selectedPolygon.value, // 修正字段名匹配后端 Executor
+      mode: selectedPolygon.value ? 'Polygon' : 'Viewport'
+    };
+    
+    // 传入 colorIndex: 0 (红色)，表示这是常规查询结果，非 AI 推荐
+    const filtered = await semanticSearch(keyword.trim(), [], { 
+      spatialContext,
+      colorIndex: 0 
+    });
     
     tagData.value = filtered;
     if (mapComponent.value) {
-      mapComponent.value.showHighlights(filtered, { full: true });
+      mapComponent.value.showHighlights(filtered, { fitView: true });
     }
     
     if (filtered.length > 0) {
@@ -456,7 +485,7 @@ const handleClearSearch = () => {
   // 通知子组件清除搜索结果
   if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   if (mapComponent.value) {
-    mapComponent.value.showHighlights(selectedFeatures.value, { full: true });
+    mapComponent.value.showHighlights(selectedFeatures.value, { fitView: true });
   }
   ElMessage.info('已清除查询结果');
 };
@@ -620,6 +649,15 @@ const handleToggleFilter = (enabled) => {
 };
 
 /**
+ * 处理全域感知模式切换
+ * @param {boolean} enabled 
+ */
+const handleGlobalAnalysisChange = (enabled) => {
+  globalAnalysisEnabled.value = enabled;
+  console.log('[App] 全域感知模式:', enabled ? '开启' : '关闭');
+};
+
+/**
  * 处理地图移动结束
  * 使用节流函数限制频率，更新地图边界用于实时过滤
  */
@@ -723,6 +761,94 @@ function handleDebugShow(groupName) {
   mapComponent.value.showHighlights(allPoiFeatures.value, { full: true });
   selectedFeatures.value = allPoiFeatures.value;
 }
+
+/**
+ * 处理上传的矢量面文件
+ * 将上传的 GeoJSON 多边形渲染到地图上，并筛选 POI
+ */
+// 处理上传的矢量面文件
+function handleVectorPolygonUploaded(feature) {
+  console.log('[App] 收到上传的矢量面要素:', feature);
+  
+  if (!feature || !feature.geometry) {
+    ElMessage.error('无效的面要素');
+    return;
+  }
+  
+  // 获取多边形坐标
+  const geomType = feature.geometry.type;
+  let coordinates;
+  
+  if (geomType === 'Polygon') {
+    coordinates = feature.geometry.coordinates[0]; // 取外环
+  } else if (geomType === 'MultiPolygon') {
+    coordinates = feature.geometry.coordinates[0][0]; // 取第一个多边形的外环
+  } else {
+    ElMessage.error('不支持的几何类型: ' + geomType);
+    return;
+  }
+  
+  // 调用 MapContainer 来渲染多边形并触发筛选
+  // 注意：MapContainer 内部现在会自动触发 onPolygonComplete，从而发射 polygon-completed 事件
+  // 所以这里不需要再手动计算筛选结果
+  if (mapComponent.value && mapComponent.value.addUploadedPolygon) {
+    mapComponent.value.addUploadedPolygon(coordinates);
+    ElMessage.success('已应用选区，正在筛选...');
+  } else {
+    ElMessage.warning('地图组件未就绪');
+  }
+}
+
+/**
+ * 处理 AI 请求渲染到标签云
+ * @param {Array} data - POI 名称数组 或 GeoJSON Feature 数组
+ */
+function handleRenderAIResult(data) {
+  if (!data || data.length === 0) return;
+  
+  let featuresToRender = [];
+
+  // 情况1: 传递的是 Feature 数组 (后端搜索结果)
+  if (typeof data[0] === 'object' && data[0].type === 'Feature') {
+    featuresToRender = data;
+    console.log('[App] 渲染外部 POI 数据:', featuresToRender.length);
+  } 
+  // 情况2: 传递的是名称数组 (遗留逻辑)
+  else if (typeof data[0] === 'string') {
+    const nameSet = new Set(data);
+    featuresToRender = allPoiFeatures.value.filter(p => 
+      p.properties && (nameSet.has(p.properties['名称']) || nameSet.has(p.properties.name))
+    );
+    
+    if (featuresToRender.length === 0) {
+      ElMessage.warning('未在当前数据中找到匹配的 POI');
+      return;
+    }
+  }
+
+  // 更新选中数据
+  selectedFeatures.value = featuresToRender;
+  // 关键修复：同时更新 tagData，确保标签云组件能够渲染这些数据
+  tagData.value = featuresToRender;
+  
+  // 对于搜索结果，强制设置为第5组颜色（紫色），以区分常规数据
+  featuresToRender.forEach(f => {
+    if (f.properties) f.properties._groupIndex = 4;
+  });
+
+  // 联动地图高亮
+  if (mapComponent.value) {
+    // 如果是外部数据，可能需要在地图上额外绘制
+    mapComponent.value.showHighlights(featuresToRender, { 
+      fitView: true,
+      clearPrevious: true 
+    });
+  }
+  
+  ElMessage.success(`已将 ${featuresToRender.length} 个结果渲染到标签云`);
+}
+
+
 
 /**
  * 初始化：清空所有数据
