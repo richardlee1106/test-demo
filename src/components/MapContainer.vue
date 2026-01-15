@@ -64,7 +64,7 @@
         />
       </div>
       
-      <!-- 全域感知控件（Spatial-RAG 增强）- 仅示意 -->
+      <!-- 全域感知控件（GeoLoom-RAG 增强）- 仅示意 -->
       <div class="control-divider"></div>
       <div class="control-row">
         <span class="filter-label">全域感知</span>
@@ -77,7 +77,7 @@
         />
       </div>
       <div class="control-hint">
-        <span>Spatial-RAG 全域感知已启用</span>
+        <span>GeoLoom-RAG 全域感知已启用</span>
       </div>
     </div>
     
@@ -86,6 +86,8 @@
       v-model="weightDialogVisible"
       title="请选择需要渲染的地理权重"
       width="360px"
+      class="mirspatial-dialog"
+      append-to-body
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :show-close="false"
@@ -1044,8 +1046,20 @@ function onPolygonComplete(polygonGeom, isRefresh = false) {
   
   // 热力图数据会在 showHighlights 中自动同步更新
 
-  // 计算多边形中心点
+  // 计算多边形中心点（像素坐标 + 地理坐标）
   const centerPixelObj = calculatePolygonCenter(ringPixels);
+  
+  // 计算地理中心点（用于标签云布局）
+  const geoCenter = calculatePolygonGeoCenter(ringCoords);
+  
+  // 添加中心点标记 (蓝色五角星) - 与圆形模式保持一致
+  centerLayerSource.clear();
+  if (geoCenter) {
+    const centerFeature = new Feature({
+      geometry: new Point(geoCenter)
+    });
+    centerLayerSource.addFeature(centerFeature);
+  }
 
   showHighlights(insideRaw, { full: true });
   
@@ -1053,7 +1067,8 @@ function onPolygonComplete(polygonGeom, isRefresh = false) {
     polygon: ringCoords.map((c) => toLonLat(c)), 
     center: centerPixelObj,
     selected: insideRaw,
-    type: 'Polygon'
+    type: 'Polygon',
+    polygonCenter: geoCenter ? toLonLat(geoCenter) : null  // 传递地理中心坐标
   });
 }
 
@@ -1070,6 +1085,25 @@ function calculatePolygonCenter(ringPixels) {
   }
   
   return { x: x / n, y: y / n };
+}
+
+/**
+ * 计算多边形地理中心点（用于地图标记和标签云布局）
+ * @param {Array} ringCoords - 多边形顶点坐标数组（EPSG:3857）
+ * @returns {Array} 中心点坐标 [x, y]（EPSG:3857）
+ */
+function calculatePolygonGeoCenter(ringCoords) {
+  if (!ringCoords || ringCoords.length === 0) return null;
+  
+  let x = 0, y = 0;
+  const n = ringCoords.length;
+  
+  for (let i = 0; i < n; i++) {
+    x += ringCoords[i][0];
+    y += ringCoords[i][1];
+  }
+  
+  return [x / n, y / n];
 }
 
 /**
@@ -1204,6 +1238,7 @@ function transformLon(x, y) {
 .map-container {
   width: 100%;
   height: 100%;
+  background-color: #000;
 }
 
 .map-filter-control {
@@ -1211,15 +1246,17 @@ function transformLon(x, y) {
   top: 10px;
   right: 10px;
   z-index: 1000;
-  background-color: rgba(255, 255, 255, 0.9);
-  padding: 10px 12px;
-  border-radius: 4px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  background: rgba(15, 23, 42, 0.7); /* 深色透明背景 */
+  backdrop-filter: blur(12px); /* 玻璃拟态 */
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.3); /* 紫色细边框 */
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
-  min-width: 140px;
+  gap: 12px;
+  min-width: 160px;
 }
 
 .control-row {
@@ -1231,21 +1268,22 @@ function transformLon(x, y) {
 }
 
 .filter-label {
-  font-size: 14px;
-  color: #333;
-  font-weight: 500;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 600;
   white-space: nowrap;
+  letter-spacing: 0.5px;
 }
 
 .filter-label.disabled {
-  color: #999;
+  color: rgba(255, 255, 255, 0.3);
 }
 
 .control-divider {
   width: 100%;
   height: 1px;
-  background: linear-gradient(90deg, transparent, #d0d0d0, transparent);
-  margin: 8px 0;
+  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.4), transparent);
+  margin: 4px 0;
   border: none;
   flex-shrink: 0;
 }
@@ -1279,13 +1317,22 @@ function transformLon(x, y) {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* POI 名称气泡样式 */
+/* POI 名称气泡 */
 .poi-popup {
   position: absolute;
-  z-index: 1000;
+  background: rgba(15, 23, 42, 0.9);
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
   pointer-events: none;
+  border: 1px solid rgba(99, 102, 241, 0.5);
   transform: translate(-50%, -100%);
-  animation: popupFadeIn 0.2s ease-out;
+  margin-top: -10px;
+  z-index: 2000;
+  backdrop-filter: blur(4px);
 }
 
 .popup-content {
@@ -1339,5 +1386,29 @@ function transformLon(x, y) {
   .control-row {
     gap: 8px;
   }
+}
+
+/* el-switch inactive 状态文字颜色修复 - 使用更强的选择器覆盖 */
+/* el-switch inactive 状态背景颜色修复（Slate-600），比原本的深岩灰稍浅 */
+.map-filter-control :deep(.el-switch:not(.is-checked)) {
+  --el-switch-off-color: #475569; /* Slate-600 */
+}
+
+/* 核心背景强制覆盖 - Inactive */
+.map-filter-control :deep(.el-switch:not(.is-checked) .el-switch__core) {
+  background-color: #475569 !important;
+  border-color: #475569 !important;
+}
+
+/* 核心背景强制覆盖 - Active (主题紫) */
+.map-filter-control :deep(.el-switch.is-checked .el-switch__core) {
+  background-color: #4338ca !important;
+  border-color: #4338ca !important;
+}
+
+/* 文字颜色保持默认（通常是白色），无需覆盖，或者强制设为白色以防万一 */
+.map-filter-control :deep(.el-switch:not(.is-checked) .el-switch__inner .is-text) {
+  color: #ffffff !important;
+  font-weight: 500;
 }
 </style>

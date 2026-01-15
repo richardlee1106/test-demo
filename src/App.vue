@@ -2,7 +2,47 @@
   <div id="app" class="app-layout">
     <!-- 桌面端顶部栏 -->
     <header class="fixed-top-header desktop-only-flex">
-      <div class="header-left">
+      <!-- 品牌 Logo 区 -->
+      <div class="header-logo">
+        <div class="logo-icon">
+          <!-- 地球 + 知识网络 Logo -->
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <defs>
+              <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#818cf8"/>
+                <stop offset="100%" style="stop-color:#c084fc"/>
+              </linearGradient>
+            </defs>
+            <!-- 地球轮廓 -->
+            <circle cx="16" cy="16" r="10" fill="none" stroke="url(#logo-grad)" stroke-width="1.5"/>
+            <!-- 经线 -->
+            <ellipse cx="16" cy="16" rx="5" ry="10" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.8"/>
+            <!-- 纬线 -->
+            <ellipse cx="16" cy="16" rx="10" ry="5" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="0.8"/>
+            <!-- 中心光点 -->
+            <circle cx="16" cy="16" r="3" fill="url(#logo-grad)"/>
+            <!-- 知识节点 -->
+            <circle cx="16" cy="6" r="2" fill="white"/>
+            <circle cx="24" cy="12" r="2" fill="white"/>
+            <circle cx="24" cy="20" r="2" fill="white"/>
+            <circle cx="16" cy="26" r="2" fill="white"/>
+            <circle cx="8" cy="20" r="2" fill="white"/>
+            <circle cx="8" cy="12" r="2" fill="white"/>
+          </svg>
+        </div>
+        <div class="logo-type">
+          <div class="logo-main-row">
+            <span class="logo-text">GeoLoom<span class="logo-accent">-RAG</span></span>
+            <span class="logo-subtitle">地理认知探索</span>
+          </div>
+          <div class="version-badge">v4.0 <span class="beta-tag">(beta)</span></div>
+        </div>
+      </div>
+
+      <!-- 绝对定位锚点层 -->
+      
+      <!-- 锚点1：数据发现 (右对齐至屏幕中线 50%) -->
+      <div class="layout-anchor-center-left">
         <ControlPanel ref="controlPanelRefMap"
                       panel-type="map"
                       @data-loaded="handleDataLoaded"
@@ -11,7 +51,12 @@
                       @save-result="handleSaveResult"
                       @loading-change="isLoading = $event" />
       </div>
-      <div class="header-right">
+
+      <!-- 物理中线分隔符 -->
+      <div class="layout-divider-center"></div>
+
+      <!-- 锚点2：空间指挥 (右对齐至屏幕最右边缘) -->
+      <div class="layout-anchor-screen-right">
         <ControlPanel ref="controlPanelRefTag"
                       panel-type="tag"
                       @toggle-draw="handleToggleDraw"
@@ -19,6 +64,10 @@
                       @reset="handleReset"
                       @save-result="handleSaveResult"
                       @vector-polygon-uploaded="handleVectorPolygonUploaded"
+                      @data-loaded="handleDataLoaded"
+                      @search="handleSearch"
+                      @clear-search="handleClearSearch"
+                      @loading-change="isLoading = $event"
                       :on-run-algorithm="handleRunAlgorithm" />
       </div>
     </header>
@@ -43,8 +92,9 @@
       element-loading-text="正在加载数据..."
       element-loading-background="rgba(0, 0, 0, 0.7)"
     >
-      <!-- 默认模式：左右分布 | AI展开模式：左侧上下分布 -->
-      <section class="left-section" :style="leftSectionStyle">
+      <!-- 三列横向布局 (AI展开时) | 两列布局 (默认) -->
+      <section class="left-section" :class="{ 'three-column': aiExpanded }" 
+               :style="aiExpanded ? { width: (100 - aiPanelPercent) + '%' } : {}">
         <!-- 地图面板 -->
         <div class="map-panel" :style="mapPanelStyle">
           <div class="panel-content">
@@ -63,13 +113,9 @@
           </div>
         </div>
         
-        <!-- 分隔条：默认模式垂直 | AI展开模式水平 -->
-        <div :class="aiExpanded ? 'splitter-horizontal' : 'splitter-inner'" 
-             @mousedown="aiExpanded ? startDragH() : startDrag1()">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-            <path v-if="aiExpanded" d="M12 8l5 5H7zM12 16l-5-5h10z" />
-            <path v-else d="M8 12l-5 5 5 5V7zM16 12l5-5-5-5v10z" />
-          </svg>
+        <!-- 分隔条 (已经统一风格) -->
+        <div class="splitter-inner" @mousedown="startDrag1">
+          <div class="splitter-line"></div>
         </div>
         
         <!-- 标签云面板 -->
@@ -95,15 +141,11 @@
         </div>
       </section>
       
-      <!-- AI 分隔条（AI展开时显示） -->
-      <div v-if="aiExpanded" class="splitter splitter-ai" @mousedown="startDrag2">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-        </svg>
-      </div>
+      <!-- AI 分隔线 (固定模式下改为普通边标) -->
+      <div v-if="aiExpanded" class="ai-border-line"></div>
       
-      <!-- 右侧面板：AI 对话（使用 v-show 保持状态） -->
-      <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: `${100 - aiSplitPercent}%` }">
+      <!-- 右侧面板：AI 对话 - 动态宽度 -->
+      <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: aiPanelPercent + '%' }">
         <div class="panel-content">
           <AiChat ref="aiChatRef" 
                   :poi-features="selectedFeatures" 
@@ -172,69 +214,46 @@ const isLoading = ref(false); // 全局/区域加载状态
 const selectedDrawMode = ref(''); // 存储当前的绘图模式 ('Polygon' 或 'Circle')
 const circleCenterGeo = ref(null); // 存储圆心经纬度（用于地理布局校正）
 
-// Splitter 状态
-const splitPercentage1 = ref(50);  // 默认模式：地图占 50%
-const isDragging1 = ref(false);
-const isDragging2 = ref(false);
-const isDraggingH = ref(false);  // 水平分隔条拖拽状态
-
 // AI 面板状态
 const aiExpanded = ref(false);  // AI 面板是否展开
-const aiSplitPercent = ref(50);  // AI 展开时左侧区域占比 (0-100%)
-const hSplitPercent = ref(50);   // AI 展开时地图和标签云的垂直比例
+const aiPanelPercent = ref(30);  // AI 面板宽度百分比 (固定值)
+const splitPercentage1 = ref(50);  // 默认模式：地图占 50%
+const isDragging1 = ref(false);
+const hSplitPercent = ref(50); // 已不再使用但保留以防依赖错误
 
-// 左侧区域样式（计算属性）
-const leftSectionStyle = computed(() => {
-  if (aiExpanded.value) {
-    return { width: `${aiSplitPercent.value}%` };
-  } else {
-    return { width: '100%' };
-  }
-});
-
-// 地图面板样式
+// 地图面板样式（AI展开时为三列横向布局的第一列）
 const mapPanelStyle = computed(() => {
-  if (aiExpanded.value) {
-    // AI展开时：上下分布，按 hSplitPercent 分配高度
-    return { 
-      height: `calc(${hSplitPercent.value}% - 5px)`,
-      width: '100%'
-    };
-  } else {
-    // 默认模式：左右分布，按 splitPercentage1 分配宽度
-    return { 
-      width: `calc(${splitPercentage1.value}% - 5px)`,
-      height: '100%'
-    };
-  }
+  // 在所有模式下都支持通过 splitPercentage1 动态调整宽度
+  return { 
+    width: `calc(${splitPercentage1.value}% - 5px)`,
+    height: '100%',
+    flexShrink: 0
+  };
 });
 
-// 标签云面板样式
+// 标签云面板样式（AI展开时为三列横向布局的第二列）
 const tagPanelStyle = computed(() => {
-  if (aiExpanded.value) {
-    // AI展开时：上下分布
-    return { 
-      height: `calc(${100 - hSplitPercent.value}% - 5px)`,
-      width: '100%'
-    };
-  } else {
-    // 默认模式：左右分布
-    return { 
-      width: `calc(${100 - splitPercentage1.value}% - 5px)`,
-      height: '100%'
-    };
-  }
+  // 在所有模式下都支持通过 splitPercentage1 动态调整宽度
+  return { 
+    width: `calc(${100 - splitPercentage1.value}% - 5px)`,
+    height: '100%',
+    flexShrink: 0
+  };
 });
 
 // 切换 AI 面板
 function toggleAiPanel() {
   aiExpanded.value = !aiExpanded.value;
   
-  // 展开时重置为50%分布
-  if (aiExpanded.value) {
-    aiSplitPercent.value = 50;
-    hSplitPercent.value = 50;
-  }
+  // 设置默认比例
+if (aiExpanded.value) {
+  // 展开时：AI 30%，剩下 70% 中，Map 占 25%/70% ≈ 35.7%, Tag 占 45%/70% ≈ 64.3%
+  // 我们设置为用户之前要求的 1/3 和 2/3 比例 (即 23.3% 和 46.7% 总宽)
+  splitPercentage1.value = 33.33;
+} else {
+  // 收起时：恢复 50/50 分布
+  splitPercentage1.value = 50;
+}
   
   // 切换后需要多次触发 resize 确保布局正确
   nextTick(() => {
@@ -304,6 +323,53 @@ onMounted(() => {
   // 初始化标签云为空数据；用户需要显式加载数据
   tagData.value = [];
 });
+
+// 开始拖拽 - 地图/标签云分隔条
+function startDrag1(e) {
+  if (e) e.preventDefault();
+  isDragging1.value = true;
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+// 拖拽过程中
+function onDrag(e) {
+  if (!isDragging1.value) return;
+  
+  e.preventDefault();
+  
+  // 找到左侧区域
+  const leftSection = document.querySelector('.left-section');
+  if (!leftSection) return;
+  
+  const rect = leftSection.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const totalWidth = rect.width;
+  
+  // 计算百分比并限制范围
+  let newPercent = (x / totalWidth) * 100;
+  newPercent = Math.max(10, Math.min(90, newPercent));
+  splitPercentage1.value = newPercent;
+  
+  // 实时更新布局
+  requestAnimationFrame(() => {
+    handleResize();
+  });
+}
+
+// 停止拖拽
+function stopDrag() {
+  if (isDragging1.value) {
+    isDragging1.value = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    
+    // 确保组件大小正确同步
+    nextTick(() => {
+      handleResize();
+    });
+  }
+}
 
 // 处理窗口大小调整，更新地图尺寸
 const handleResize = () => {
@@ -442,22 +508,49 @@ const handleSearch = async (keyword) => {
   }
   
   // 显示 loading 提示
-  ElMessage.info('正在进行 AI 语义搜索，请稍候...');
+  ElMessage.info('正在搜索，请稍候...');
   
   try {
-    // 调用 AI 语义搜索 (传入当前空间上下文)
+    // 构建空间上下文
     // 优先使用绘制/上传的多边形选区，其次是当前地图视野
     const spatialContext = {
       viewport: mapBounds.value,
-      boundary: selectedPolygon.value, // 修正字段名匹配后端 Executor
-      mode: selectedPolygon.value ? 'Polygon' : 'Viewport'
+      boundary: selectedPolygon.value,
+      mode: selectedPolygon.value ? 'Polygon' : 'Viewport',
+      center: circleCenterGeo.value
     };
     
-    // 传入 colorIndex: 0 (红色)，表示这是常规查询结果，非 AI 推荐
-    const filtered = await semanticSearch(keyword.trim(), [], { 
+    // 调用智能语义搜索（自动判断走快速路径还是 RAG）
+    const result = await semanticSearch(keyword.trim(), [], { 
       spatialContext,
       colorIndex: 0 
     });
+    
+    // 如果需要 AI 助手处理（复杂查询）
+    if (result.needsAiAssistant) {
+      ElMessage.info('检测到复杂查询，正在启动 AI 助手...');
+      
+      // 1. 展开 AI 面板
+      if (!aiExpanded.value) {
+        toggleAiPanel();
+      }
+      
+      // 2. 等待面板展开动画完成
+      await nextTick();
+      setTimeout(async () => {
+        // 3. 自动发送消息到 AI 助手
+        if (aiChatRef.value?.autoSendMessage) {
+          await aiChatRef.value.autoSendMessage(keyword.trim());
+        }
+      }, 300);
+      
+      // 4. 通知子组件正在处理中
+      if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
+      return;
+    }
+    
+    // 简单查询成功：直接渲染结果
+    const filtered = result.pois || [];
     
     tagData.value = filtered;
     if (mapComponent.value) {
@@ -465,16 +558,19 @@ const handleSearch = async (keyword) => {
     }
     
     if (filtered.length > 0) {
-      ElMessage.success(`AI 语义搜索完成，找到 ${filtered.length} 条相关信息！`);
+      const expandInfo = result.expandedTerms?.length > 1 
+        ? ` (同义词扩展: ${result.expandedTerms.slice(0, 3).join(', ')}...)` 
+        : '';
+      ElMessage.success(`搜索完成，找到 ${filtered.length} 条相关信息！${expandInfo}`);
       // 通知子组件有搜索结果
       if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(true);
     } else {
-      ElMessage.warning(`未找到与「${keyword}」语义相关的 POI`);
+      ElMessage.warning(`未找到与「${keyword}」相关的 POI`);
       if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
     }
   } catch (error) {
-    console.error('[App] AI 语义搜索失败:', error);
-    ElMessage.error('AI 语义搜索失败，请稍后重试');
+    console.error('[App] 搜索失败:', error);
+    ElMessage.error('搜索失败，请稍后重试');
     if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   }
 };
@@ -558,58 +654,6 @@ function handleSaveResult() {
   
   ElMessage.success(`已保存 ${features.length} 条 POI 数据 (${dataSource})`);
 }
-
-// 第一个分隔条拖拽处理（默认模式：地图 | 标签云）
-const startDrag1 = () => {
-  isDragging1.value = true;
-  document.body.style.cursor = 'col-resize';
-};
-
-// 第二个分隔条拖拽处理（AI展开模式：左侧区域 | AI）
-const startDrag2 = () => {
-  isDragging2.value = true;
-  document.body.style.cursor = 'col-resize';
-};
-
-// 水平分隔条拖拽处理（AI展开模式：地图 | 标签云 上下分布）
-const startDragH = () => {
-  isDraggingH.value = true;
-  document.body.style.cursor = 'row-resize';
-};
-
-const onDrag = (e) => {
-  const containerWidth = document.body.clientWidth;
-  const containerHeight = document.body.clientHeight - 50; // 减去 header 高度
-  
-  if (isDragging1.value) {
-    // 默认模式：调整地图和标签云的左右比例
-    let percentage = (e.clientX / containerWidth) * 100;
-    percentage = Math.max(20, Math.min(80, percentage));
-    splitPercentage1.value = percentage;
-    handleResize();
-  } else if (isDragging2.value) {
-    // AI展开模式：调整左侧区域和AI面板的比例
-    let percentage = (e.clientX / containerWidth) * 100;
-    percentage = Math.max(30, Math.min(75, percentage));
-    aiSplitPercent.value = percentage;
-    handleResize();
-  } else if (isDraggingH.value) {
-    // AI展开模式：调整地图和标签云的上下比例
-    const mainTop = 50; // header 高度
-    let percentage = ((e.clientY - mainTop) / containerHeight) * 100;
-    percentage = Math.max(25, Math.min(75, percentage));
-    hSplitPercent.value = percentage;
-    handleResize();
-  }
-};
-
-const stopDrag = () => {
-  isDragging1.value = false;
-  isDragging2.value = false;
-  isDraggingH.value = false;
-  document.body.style.cursor = '';
-  handleResize();
-};
 
 /**
  * 处理开启/关闭绘制模式
@@ -708,7 +752,7 @@ const handleFeatureLocate = (feature) => {
  * 接收地图组件筛选出的 POI 数据
  * 注意：绘制完成后仅保存选中数据，不自动渲染标签云
  * 用户需要点击"渲染标签云"按钮才会渲染
- * @param {Object} payload - { polygon, center, selected, type, circleCenter }
+ * @param {Object} payload - { polygon, center, selected, type, circleCenter, polygonCenter }
  */
 const handlePolygonCompleted = (payload) => {
   const inside = Array.isArray(payload?.selected) ? payload.selected : [];
@@ -721,9 +765,10 @@ const handlePolygonCompleted = (payload) => {
   
   // 存储绘图模式特定的数据
   selectedDrawMode.value = payload?.type || 'Polygon';
-  circleCenterGeo.value = payload?.circleCenter || null;
+  // 优先使用 circleCenter（圆形模式），否则使用 polygonCenter（多边形模式）
+  circleCenterGeo.value = payload?.circleCenter || payload?.polygonCenter || null;
   
-  console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素，等待用户点击渲染按钮`);
+  console.log(`[App] 绘制完成 (${selectedDrawMode.value}). 选中 ${inside.length} 个要素，中心点:`, circleCenterGeo.value);
   
   // 同步控制面板状态（自动关闭绘制按钮状态）
   if (controlPanelRefTag.value) {
@@ -887,48 +932,233 @@ function handleReset() {
 </script>
 
 <style>
+/* ElMessage 定位到右上角 header 下方 */
+.el-message {
+  /* 强制显示在 header (68px) 下方，右侧 */
+  top: 80px !important;
+  left: auto !important;
+  right: 40px !important;
+  transform: translateX(0) !important;
+}
+
 html, body, #app {
   height: 100vh;
   width: 100vw;
   margin: 0;
   overflow: hidden;
+  background-color: #020617; 
+  color: #f1f5f9;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99, 102, 241, 0.3) transparent;
 }
 
+/* 全量统一的 Mesh 渐变背景，增强整体感 */
 .app-layout {
   display: flex;
   flex-direction: column;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  background: 
+    radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.15) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(30, 64, 175, 0.2) 0px, transparent 50%),
+    radial-gradient(at 0% 100%, rgba(17, 24, 39, 1) 0px, transparent 50%);
+  background-attachment: fixed;
 }
 
 /* .top-controls 已移除 */
 
 .fixed-top-header {
-  flex: 0 0 auto;
+  flex: 0 0 68px;
   display: flex;
+  align-items: center;
   width: 100%;
-  background: #333;
+  padding: 0 40px;
+  background: rgba(10, 15, 26, 0.8);
+  backdrop-filter: blur(20px) saturate(160%);
   z-index: 2000;
-  border-bottom: 1px solid #444;
-}
-
-.header-left {
-  width: 53%;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08); 
+  position: relative;
   box-sizing: border-box;
 }
 
-.header-right {
-  width: 47%;
-  box-sizing: border-box;
+.fixed-top-header::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(168, 85, 247, 0.4), transparent);
+}
+
+.header-logo {
+  position: absolute; /* 固定在左侧，不参与 flex 分配以防重叠 */
+  left: 40px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 2001;
+}
+
+/* --- 全新绝对定位布局系统 --- */
+
+/* 锚点1：数据发现组 */
+/* 核心逻辑：Right 对齐到 50% (屏幕中线)，内容从右向左生长 */
+.layout-anchor-center-left {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 50%; /* 右边缘贴紧屏幕中线 */
+  display: flex;
+  align-items: center;
+  padding-right: 24px; /* 距离中线分隔符的间距 */
+  
+  /* 关键：限制向左生长的最大宽度，防止撞击 Logo (240px + some buffer) */
+  max-width: calc(50vw - 260px); 
+  white-space: nowrap; /* 防止内容换行 */
+}
+
+/* 锚点2：空间指挥组 */
+/* 核心逻辑：Right 对齐到 0 (屏幕边缘)，内容从右向左生长 */
+.layout-anchor-screen-right {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0; /* 右边缘贴紧屏幕 */
+  display: flex;
+  align-items: center;
+  padding-right: 40px; /* 距离屏幕边缘的安全距离 */
+  white-space: nowrap;
+}
+
+/* 物理中线 */
+.layout-divider-center {
+  position: absolute;
+  left: 50%;
+  top: 22px;
+  bottom: 22px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateX(-50%); /* 精准居中 */
+}
+
+/* Logo 区域 */
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.logo-icon {
+  width: 42px;
+  height: 42px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.15));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.25);
+  border: 1px solid rgba(129, 140, 248, 0.2);
+}
+
+.logo-type {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.logo-text {
+  font-size: 19px;
+  font-weight: 900;
+  letter-spacing: -0.8px;
+  color: #f8fafc;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.logo-accent {
+  background: linear-gradient(to right, #818cf8, #c084fc);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-left: 2px;
+}
+
+.logo-main-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.logo-subtitle {
+  font-size: 16px;
+  font-weight: 700;
+  background: linear-gradient(to right, #a5b4fc, #c4b5fd, #ddd6fe);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  position: relative;
+  padding-left: 10px;
+}
+
+/* 中文副标题前的分隔线 */
+.logo-subtitle::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 14px;
+  background: linear-gradient(to bottom, transparent, rgba(165, 180, 252, 0.6), transparent);
+}
+
+.version-badge {
+  font-size: 13px; /* 字体加大 */
+  margin-top: 4px;
+  color: #818cf8;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.beta-tag {
+  color: #fbbf24;
+}
+
+/* 控制区整体框架 */
+/* 已重构为 section-discovery 和 section-command */
+
+.control-group {
+  display: flex;
+  align-items: center;
+  /* 移除所有垫子背景与边距，让控件自然流动 */
+}
+
+.header-divider {
+  width: 2px;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, rgba(99, 102, 241, 0.3), transparent);
+  margin: 0 8px;
+  flex-shrink: 0;
 }
 
 .mobile-header {
   flex: 0 0 auto;
   width: 100%;
-  background: #333;
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(12px);
   z-index: 2000;
-  border-bottom: 1px solid #444;
+  border-bottom: 1px solid rgba(99, 102, 241, 0.4);
   min-height: 50px;
 }
 
@@ -967,26 +1197,32 @@ html, body, #app {
   flex-direction: row; /* 默认模式：左右分布 */
   height: 100%;
   overflow: hidden;
+  flex: 1;
+  background: transparent;
 }
 
-.bottom-split.ai-expanded .left-section {
-  flex-direction: column; /* AI展开模式：上下分布 */
+/* 三列模式：地图 | 标签云 | AI面板 */
+.left-section.three-column {
+  flex-direction: row; 
+  flex: none; /* 由 style 绑定的百分比控制宽度 */
 }
 
-/* 地图面板 */
+/* 地图面板 - 增强一体化 */
 .map-panel {
   overflow: hidden;
-  background: #000;
+  background: transparent;
   display: flex;
   flex-direction: column;
 }
 
-/* 标签云面板 */
+/* 标签云面板 - 增强一体化 */
 .tag-panel {
   overflow: hidden;
-  background: #001018;
+  background: rgba(15, 23, 42, 0.6); /* 半透明背景，透出全局 mesh */
+  backdrop-filter: blur(10px);
   display: flex;
   flex-direction: column;
+  border-left: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 /* 右侧AI面板 */
@@ -1029,52 +1265,54 @@ html, body, #app {
   color: #fff;
 }
 
-/* 内部分隔条（在 left-section 内部，用于地图和标签云之间） */
+/* 统一分隔条样式 */
+/* 现代感分隔条 */
 .splitter-inner {
-  width: 10px;
-  min-width: 10px;
+  width: 14px;
+  min-width: 14px;
   height: 100%;
-  background: linear-gradient(180deg, #4c1d95 0%, #312e81 100%);
+  background: transparent;
   cursor: col-resize;
-  z-index: 10;
-  transition: all 0.2s;
-  flex-shrink: 0;
+  z-index: 100;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #a5b4fc;
-}
-.splitter-inner:hover, .splitter-inner:active {
-  background: linear-gradient(180deg, #7c3aed 0%, #6366f1 100%);
-  color: #fff;
+  position: relative;
 }
 
-/* AI 分隔条特殊样式 */
-.splitter-ai {
-  background: linear-gradient(180deg, #4c1d95 0%, #312e81 100%);
-}
-.splitter-ai:hover, .splitter-ai:active {
-  background: linear-gradient(180deg, #7c3aed 0%, #6366f1 100%);
+.splitter-line {
+  width: 2px;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 1px;
+  transition: all 0.3s ease;
+  position: relative;
 }
 
-/* 水平分隔条 */
-.splitter-horizontal {
-  height: 10px;
-  width: 100%;
-  background: linear-gradient(90deg, #4c1d95 0%, #312e81 100%);
-  cursor: row-resize;
-  z-index: 10;
-  transition: all 0.2s;
+.splitter-inner:hover .splitter-line,
+.splitter-inner:active .splitter-line {
+  width: 4px;
+  background: linear-gradient(to bottom, #6366f1, #a855f7);
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.6);
+}
+
+/* AI面板固定边框 */
+.ai-border-line {
+  width: 1px;
+  height: 100%;
+  background: rgba(99, 102, 241, 0.2);
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #a5b4fc;
 }
-.splitter-horizontal:hover, .splitter-horizontal:active {
-  background: linear-gradient(90deg, #7c3aed 0%, #6366f1 100%);
-  color: #fff;
+
+.ai-panel {
+  border-left: none !important; /* 我们使用 ai-border-line */
 }
+
+/* 隐藏旧类名 */
+.splitter, .splitter-ai, .splitter-horizontal {
+  display: none !important;
+}
+
 
 /* AI 浮动按钮 */
 .ai-fab {
@@ -1121,6 +1359,8 @@ html, body, #app {
   font-weight: 600;
   white-space: nowrap;
 }
+
+
 
 .ai-fab-badge {
   position: absolute;
@@ -1191,5 +1431,56 @@ html, body, #app {
   .ai-fab-text {
     font-size: 13px;
   }
+}
+</style>
+
+<!-- 全局非隔离样式，强制覆盖 Element Plus 默认外观 -->
+<style>
+/* 终极弹窗美化：科技极简，大道至简 */
+body .el-overlay .el-dialog.mirspatial-dialog {
+  background: #0b1120 !important; /* 更深邃、稳定的专业色 */
+  backdrop-filter: blur(24px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5) !important;
+  position: relative !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+}
+
+/* 彻底移除霓虹线条 */
+body .el-overlay .el-dialog.mirspatial-dialog::before {
+  display: none !important;
+}
+
+body .el-overlay .el-dialog.mirspatial-dialog .el-dialog__header {
+  padding: 16px 20px !important;
+  margin: 0 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+  background: rgba(255, 255, 255, 0.01) !important;
+}
+
+body .el-overlay .el-dialog.mirspatial-dialog .el-dialog__title {
+  color: #f1f5f9 !important;
+  font-weight: 600 !important;
+  font-size: 16px !important;
+}
+
+body .el-overlay .el-dialog.mirspatial-dialog .el-dialog__body {
+  padding: 24px !important;
+  color: #94a3b8 !important;
+}
+
+body .el-overlay .el-dialog.mirspatial-dialog .el-input__wrapper {
+  background: #020617 !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: none !important;
+}
+
+body .el-overlay .el-dialog.mirspatial-dialog .el-button--primary {
+  background: #6366f1 !important;
+  border: none !important;
+  font-weight: 500 !important;
+  padding: 8px 20px !important;
 }
 </style>

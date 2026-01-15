@@ -50,6 +50,7 @@ import * as d3 from 'd3';
 import BasicWorker from '../workers/basic.worker.js?worker';
 import SpiralWorker from '../workers/spiral.worker.js?worker';
 import GeoWorker from '../workers/geo.worker.js?worker';
+import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
 import { ElMessage } from 'element-plus';
 import { rasterExtractor } from '../utils/RasterExtractor.js';
@@ -186,9 +187,15 @@ function initWorker() {
   }
   
   // 确定 worker 类型
-  // 优先级: Geo (圆形模式) > 选定的算法 (basic/spiral)
-  if (props.drawMode === 'Circle') {
-    worker = new GeoWorker();
+  // 优先级: 
+  // 1. Gravity (有坐标数据时) - 只要有地理属性就优先使用重心引力布局，保证空间一致性
+  // 2. Spiral / Basic - 无地理属性或手动强制选择时使用
+  const hasGeoData = props.data?.some(f => f.geometry?.coordinates);
+  
+  if (hasGeoData && props.algorithm !== 'spiral' && props.algorithm !== 'basic') {
+    // 只要有坐标数据且未强制要求普通螺旋布局，就使用 GravityWorker
+    worker = new GravityWorker();
+    console.log(`[TagCloud] 采用地理感知的 GravityWorker (${props.data?.length || 0}个标签)`);
   } else if (props.algorithm === 'basic') {
     worker = new BasicWorker();
   } else {
@@ -905,7 +912,7 @@ defineExpose({
 .zoom-controls {
   position: absolute;
   top: 20px;
-  right: 20px;
+  left: 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -996,11 +1003,20 @@ defineExpose({
 }
 
 .empty-text {
-  font-size: 24px;
-  color: rgba(255, 255, 255, 0.4);
-  font-weight: 600;
-  letter-spacing: 2px;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  font-size: 20px;
+  color: #6366f1;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  background: linear-gradient(to right, #6366f1, #a855f7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: breathing 3s ease-in-out infinite;
   user-select: none;
+}
+
+@keyframes breathing {
+  0%, 100% { transform: scale(0.95); opacity: 0.5; filter: drop-shadow(0 0 5px rgba(99, 102, 241, 0.2)); }
+  50% { transform: scale(1.05); opacity: 1; filter: drop-shadow(0 0 15px rgba(99, 102, 241, 0.6)); }
 }
 </style>

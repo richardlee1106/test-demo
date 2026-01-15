@@ -15,16 +15,29 @@ let pool = null;
 export async function initDatabase() {
   if (pool) return pool;
   
-  const dbConfig = {
-    host: process.env.POSTGRES_HOST || 'localhost',
-    port: parseInt(process.env.POSTGRES_PORT) || 5432,
-    user: process.env.POSTGRES_USER || 'postgres',
-    password: process.env.POSTGRES_PASSWORD || '123456',
-    database: process.env.POSTGRES_DATABASE || 'tagcloud',
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
-  };
+  let dbConfig;
+  
+  if (process.env.DATABASE_URL) {
+    dbConfig = {
+      connectionString: process.env.DATABASE_URL,
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    };
+    console.log(`🔌 正在使用 DATABASE_URL 连接数据库: ${process.env.DATABASE_URL.split('@')[1]}`);
+  } else {
+    dbConfig = {
+      host: process.env.POSTGRES_HOST || 'localhost',
+      port: parseInt(process.env.POSTGRES_PORT) || 5432,
+      user: process.env.POSTGRES_USER || 'postgres',
+      password: process.env.POSTGRES_PASSWORD || '123456',
+      database: process.env.POSTGRES_DATABASE || 'tagcloud',
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    };
+    console.log(`🔌 正在使用配置属性连接数据库: ${dbConfig.host}:${dbConfig.port}`);
+  }
   
   pool = new Pool(dbConfig);
   

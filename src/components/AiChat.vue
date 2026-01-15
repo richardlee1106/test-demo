@@ -2,26 +2,28 @@
   <div class="ai-chat-container">
     <!-- 头部状态栏 -->
     <div class="chat-header">
-      <div class="header-left">
-        <div class="ai-avatar">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-          </svg>
+      <div class="header-row-1">
+        <div class="header-left">
+          <div class="ai-avatar">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+            </svg>
+          </div>
+          <div class="header-info">
+            <span class="ai-name">标签云智能助手</span>
+            <span class="ai-status" :class="{ online: isOnline, offline: !isOnline }">
+              {{ statusText }}
+            </span>
+          </div>
         </div>
-        <div class="header-info">
-          <span class="ai-name">标签云智能助手</span>
-          <span class="ai-status" :class="{ online: isOnline, offline: !isOnline }">
-            {{ statusText }}
-          </span>
-        </div>
-      </div>
-      <div class="header-right">
         <div class="poi-badge" v-if="poiCount > 0">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
             <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
           </svg>
           <span>{{ poiCount }} 个标签</span>
         </div>
+      </div>
+      <div class="header-row-2">
         <button class="action-btn clear-btn" @click="clearChat">清空对话</button>
         <button class="action-btn save-btn" @click="saveChatHistory">保存对话</button>
         <button class="action-btn close-btn" @click="emit('close')">收起面板</button>
@@ -78,7 +80,7 @@
         </div>
         <div class="message-content">
           <div class="thinking-indicator">
-            <span class="thinking-text">Spatial-RAG正在思考和检索...</span>
+            <span class="thinking-text">GeoLoom-RAG正在思考和检索...</span>
             <div class="typing-indicator">
               <span></span><span></span><span></span>
             </div>
@@ -592,10 +594,29 @@ onMounted(() => {
   setInterval(checkOnlineStatus, 30000);
 });
 
+/**
+ * 自动发送消息（供父组件调用）
+ * 用于复杂查询时，自动打开AI面板并发送用户输入
+ * @param {string} message - 要发送的消息内容
+ */
+async function autoSendMessage(message) {
+  if (!message || !message.trim()) return;
+  
+  // 填充输入框
+  inputText.value = message.trim();
+  
+  // 等待 DOM 更新
+  await nextTick();
+  
+  // 自动发送
+  await sendMessage();
+}
+
 // 暴露方法给父组件
 defineExpose({
   clearChat,
-  checkOnlineStatus
+  checkOnlineStatus,
+  autoSendMessage
 });
 </script>
 
@@ -612,16 +633,28 @@ defineExpose({
 /* 头部 */
 .chat-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
   background: rgba(17, 24, 39, 0.95);
   border-bottom: 1px solid rgba(75, 85, 99, 0.4);
   backdrop-filter: blur(10px);
   flex-shrink: 0;
-  overflow: hidden;
   position: relative;
   z-index: 10;
+}
+
+.header-row-1 {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-row-2 {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .header-left {

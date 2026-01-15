@@ -2,15 +2,35 @@
   <div class="control-panel">
     <div v-if="isMapPanel" class="left-controls" :class="{ 'full-width': isMapPanel }">
       <div class="select-group">
+        <!-- 当前选中路径展示 -->
+        <div class="current-category-display" v-if="selectedCategoryPath.length > 0">
+          <span class="category-tag">{{ getCategoryLabel(selectedCategoryPath) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- POI 类别选择抽屉 -->
+    <el-drawer
+      v-model="categoryDrawerVisible"
+      title="POI 语义分类选择"
+      direction="ltr"
+      :size="380"
+      append-to-body
+      class="category-drawer"
+      :modal-class="'category-drawer-modal'"
+      :with-header="true"
+    >
+      <div class="drawer-content">
+        <p class="drawer-tip">请选择您感兴趣的地理语义类别：</p>
         <el-cascader
           v-model="selectedCategoryPath"
           :options="categoryOptions"
           :props="{ checkStrictly: true, expandTrigger: 'hover' }"
-          placeholder="请先按照语义选择类别"
+          placeholder="请选择类别..."
           @change="handleCascaderChange"
-          class="group-select glass-cascader"
+          class="group-select glass-cascader drawer-cascader"
           popper-class="poi-cascader-popper"
-          :teleported="false"
+          :teleported="false" 
           :show-all-levels="false"
           filterable
           clearable
@@ -20,26 +40,20 @@
             <span v-if="!node.isLeaf"> ({{ data.children.length }}) </span>
           </template>
         </el-cascader>
+        
+        <div class="drawer-actions">
+           <p class="drawer-note">提示：支持拼音搜索，悬停展开子级。</p>
+        </div>
       </div>
-
-      <div class="search-box">
-        <button 
-          class="primary-btn desktop-btn" 
-          :class="{ 'warning-btn': hasSearchResult }"
-          @click="handleSemanticQueryClick"
-        >
-          {{ hasSearchResult ? '清除查询结果' : '语义查询' }}
-        </button>
-        <!-- 右侧移动过来的保存按钮 -->
-        <button class="save-btn desktop-save-btn" @click="handleSaveResult">保存筛选结果</button>
-      </div>
-    </div>
+    </el-drawer>
 
     <!-- 语义查询弹窗 -->
     <el-dialog
       v-model="searchDialogVisible"
       title="AI 语义查询"
-      width="400px"
+      width="440px"
+      append-to-body
+      class="mirspatial-dialog"
       :close-on-click-modal="false"
     >
       <div class="search-dialog-content">
@@ -82,7 +96,6 @@
       </div>
     </div>
 
-    <!-- 移动端菜单遮罩层 -->
     <div
       v-if="showMobileMenu"
       class="mobile-menu-overlay"
@@ -129,43 +142,102 @@
 
     <div v-if="isTagPanel" class="right-controls" :class="{ 'full-width': isTagPanel }">
       <!-- 搜索控件已移动到左侧 -->
-
-      <!-- 实时过滤控件已移动到 MapContainer -->
-
-
       <!-- <el-button type="success" @click="debugShow">调试显示</el-button> -->
-      <el-select
-        v-if="!drawEnabled"
-        v-model="selectedDrawMode"
-        placeholder="绘制"
-        class="control-btn draw-select"
-        @change="handleDrawModeChange"
-      >
-        <el-option label="绘制多边形" value="Polygon" />
-        <el-option label="绘制圆形（中心型）" value="Circle" />
-      </el-select>
-      <button v-else @click="stopDraw" class="warning-btn desktop-btn control-btn">
-        停止绘制
-      </button>
-      
-      <!-- 上传矢量面文件按钮 -->
-      <input 
-        type="file" 
-        ref="vectorFileInput" 
-        @change="handleVectorFileUpload" 
-        accept=".geojson,.json,.shp,.zip"
-        style="display: none;"
-      />
-      <button @click="triggerVectorUpload" class="upload-btn desktop-btn control-btn">
-        上传选区
-      </button>
-      
-      <button @click="run" class="success-btn desktop-btn control-btn">
-        渲染标签云
-      </button>
-      <button @click="reset" class="info-btn desktop-btn control-btn">
-        初始化
-      </button>
+      <div class="action-group">
+        <!-- 隐藏的矢量选区上传文件框 -->
+        <input 
+          type="file" 
+          ref="vectorFileInput" 
+          @change="handleVectorFileUpload" 
+          accept=".geojson,.json,.shp,.zip"
+          style="display: none;"
+        />
+        
+        <el-select
+          v-if="!drawEnabled"
+          v-model="selectedDrawMode"
+          placeholder="空间选区"
+          class="control-btn draw-select"
+          @change="handleDrawModeChange"
+        >
+          <template #prefix>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </template>
+          <el-option label="多边形" value="Polygon" />
+          <el-option label="圆形 (半径型)" value="Circle" />
+        </el-select>
+        
+        <button v-else @click="stopDraw" class="warning-btn stop-draw-btn">
+          停止绘制
+        </button>
+        
+        <el-tooltip content="上传矢量选区 (GeoJSON)" placement="bottom">
+          <button @click="triggerVectorUpload" class="upload-btn icon-btn">
+             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+            </svg>
+          </button>
+        </el-tooltip>
+
+        <!-- 侧边栏触发按钮 (移动到右侧) -->
+        <el-tooltip content="选择 POI 类别" placement="bottom">
+          <button 
+            class="primary-btn icon-btn" 
+            :class="{ 'active': categoryDrawerVisible }"
+            @click="categoryDrawerVisible = true"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="3" width="7" height="7" rx="1" />
+              <rect x="14" y="14" width="7" height="7" rx="1" />
+              <rect x="3" y="14" width="7" height="7" rx="1" />
+            </svg>
+          </button>
+        </el-tooltip>
+
+        <!-- AI 搜索按钮 (移动到右侧) -->
+        <el-tooltip content="AI 语义查询" placement="bottom">
+          <button 
+            class="primary-btn icon-btn" 
+            :class="{ 'active': hasSearchResult }"
+            @click="handleSemanticQueryClick"
+          >
+            <svg v-if="!hasSearchResult" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6 6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </el-tooltip>
+
+        <div class="command-separator"></div>
+
+        <el-tooltip content="导出 CSV 数据" placement="bottom">
+          <button class="save-btn icon-btn" @click="handleSaveResult">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+            </svg>
+          </button>
+        </el-tooltip>
+
+        <el-tooltip content="系统重置" placement="bottom">
+          <button @click="reset" class="info-btn icon-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+            </svg>
+          </button>
+        </el-tooltip>
+
+        <button @click="run" class="success-btn run-btn">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="margin-right: 6px;">
+            <path d="M5 3l14 9-14 9V3z"/>
+          </svg>
+          渲染词云
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -185,6 +257,7 @@ const showMobileMenu = ref(false);
 const searchDialogVisible = ref(false);
 const isSearching = ref(false);
 const hasSearchResult = ref(false);
+const categoryDrawerVisible = ref(false);
 const groupLoading = ref(false);
 
 const props = defineProps({
@@ -194,6 +267,16 @@ const props = defineProps({
   currentAlgorithm: { type: String, default: 'basic' },
   currentPoiFeatures: { type: Array, default: () => [] } // 当前显示的 POI 数据
 });
+
+// 获取当前选中的类别名称（用于在Header显示）
+const getCategoryLabel = (path) => {
+  if (!path || path.length === 0) return '';
+  // 简单实现：只显示最后一级对应的名称，需要遍历树比较麻烦，
+  // 这里做个简化：显示最后一级的 value (通常是中文名)
+  // 或者如果 options 已经加载，尝试查找 label
+  // 为了性能和简单，这里假设 value 就是可读名称，或者用户能接受显示 value
+  return path[path.length - 1];
+};
 
 const isMapPanel = computed(() => props.panelType === 'map');
 const isTagPanel = computed(() => props.panelType === 'tag');
@@ -526,54 +609,43 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 }
 
 .left-controls {
-  width: 50%;
   display: flex;
   align-items: center;
-  justify-content: space-between; /* 将搜索框推到此 50% 容器的右边缘 */
-  gap: 16px;
-  padding-left: 10px;
-  padding-right: 10px; /* 添加内边距以避免紧贴分隔条区域 */
-  box-sizing: border-box;
+  gap: 12px;
 }
 
 .select-group {
   display: flex;
-  gap: 16px;
-  position: relative; /* 必须添加此项，否则 loading 动画可能飘到屏幕外 */
-  min-width: 100px;
+  align-items: center;
+  gap: 12px;
 }
 
 .right-controls {
-  width: 50%;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
-  gap: 16px;
-  padding-left: 10px; /* 添加内边距以与分隔条区域分开 */
-  padding-right: 10px;
-  box-sizing: border-box;
+  gap: 12px;
 }
 
 /* 适配全宽模式 */
 .left-controls.full-width,
 .right-controls.full-width {
-  width: 100%;
-  padding: 8px; /* 增加内边距 */
-  min-height: 56px; /* 确保最小高度，允许自适应 */
-  background: #333; /* 背景色 */
+  /* 移除 width: 100%，防止在 flex 布局中撑开容器导致截断 */
+  padding: 0;
+  min-height: auto;
+  background: transparent;
   display: flex;
   align-items: center;
-  flex-wrap: wrap; /* 允许换行 */
+  justify-content: flex-end; /* 统统靠右对齐：左组靠分隔线，右组靠屏幕边 */
 }
 
-/* 地图控件 - 左对齐（默认） */
+/* 地图控件 - 强制右对齐以靠近中线 */
 .left-controls.full-width {
-  justify-content: flex-start;
+  justify-content: flex-end !important;
 }
 
-/* 标签控件 - 右对齐 */
+/* 标签控件 - 强制右对齐以靠近屏边 */
 .right-controls.full-width {
-  justify-content: flex-end;
+  justify-content: flex-end !important;
 }
 
 /* 优化 loading 覆盖层圆角 */
@@ -584,15 +656,86 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
   display: flex;
   align-items: center;
   gap: 8px;
-  /* margin-right: auto; 已移除 */
 }
 
-.search-input {
-  width: 160px;
+.action-group {
+  display: flex;
+  align-items: center;
+  gap: 12px; /* 统一间距 */
+}
+
+.command-separator {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 4px;
+}
+
+.icon-btn {
+  width: 36px !important;
+  height: 36px !important;
+  padding: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  transform: translateY(-1px);
+}
+
+.icon-btn.active {
+  background: rgba(99, 102, 241, 0.25) !important;
+  border-color: rgba(99, 102, 241, 0.6) !important;
+  color: #a5b4fc;
+  box-shadow: 0 0 15px rgba(99, 102, 241, 0.3);
+}
+
+.run-btn {
+  padding: 0 16px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.5px;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+  border-color: rgba(16, 185, 129, 0.4) !important;
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+}
+
+.run-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 0 0 25px rgba(16, 185, 129, 0.5);
+}
+
+.stop-draw-btn {
+  padding: 0 16px !important;
+  animation: pulse-red 2s infinite;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
 .group-select {
-  width: 280px;
+  width: 220px;
+}
+
+.draw-select {
+  width: 130px;
+}
+
+/* 针对内部 wrapper 的样式 (更精致) */
+.glass-cascader :deep(.el-input__wrapper),
+.draw-select :deep(.el-input__wrapper) {
+  background: rgba(15, 23, 42, 0.4) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  height: 36px;
 }
 
 /* 级联选择器下拉面板样式 (teleported=false 后生效) */
@@ -696,67 +839,63 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 /* 通用按钮基础样式 (用于保持一致性) */
 .primary-btn, .warning-btn, .success-btn, .info-btn, .save-btn, .upload-btn {
   flex-shrink: 0;
-  border: none;
-  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
   color: white;
   font-size: 13px;
-  padding: 0 12px;
+  padding: 0 16px;
   cursor: pointer;
   white-space: nowrap;
-  font-weight: 500;
-  line-height: 32px;
-  transition: transform 0.15s, box-shadow 0.15s;
-  height: 32px;
-  display: inline-flex; /* 确保内容垂直居中 */
+  font-weight: 600;
+  line-height: 36px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  height: 36px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  outline: none; /* 去除点击时的默认轮廓 */
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(8px);
 }
 
 .primary-btn {
-  background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.8) 0%, rgba(51, 126, 204, 0.8) 100%);
+  border-color: rgba(64, 158, 255, 0.4);
 }
 
 .primary-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.4);
-}
-
-.primary-btn:active {
-  transform: translateY(0);
-  opacity: 0.9;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(64, 158, 255, 0.3);
+  background: linear-gradient(135deg, rgba(64, 158, 255, 1) 0%, rgba(51, 126, 204, 1) 100%);
 }
 
 .warning-btn {
-  background: linear-gradient(135deg, #e6a23c 0%, #d48806 100%);
+  background: linear-gradient(135deg, rgba(230, 162, 60, 0.8) 0%, rgba(212, 136, 6, 0.8) 100%);
+  border-color: rgba(230, 162, 60, 0.4);
 }
 
 .warning-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(230, 162, 60, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(230, 162, 60, 0.3);
 }
 
 .success-btn {
-  background: linear-gradient(135deg, #67c23a 0%, #529b2e 100%);
+  background: linear-gradient(135deg, rgba(103, 194, 58, 0.8) 0%, rgba(82, 155, 46, 0.8) 100%);
+  border-color: rgba(103, 194, 58, 0.4);
 }
 
 .success-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(103, 194, 58, 0.4);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(103, 194, 58, 0.3);
 }
 
 .info-btn {
-  background: linear-gradient(135deg, #909399 0%, #73767a 100%);
+  background: linear-gradient(135deg, rgba(144, 147, 153, 0.7) 0%, rgba(115, 118, 122, 0.7) 100%);
+  border-color: rgba(144, 147, 153, 0.4);
 }
 
-.info-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(144, 147, 153, 0.4);
-}
-
-/* 上传按钮 - 紫色渐变 */
 .upload-btn {
-  background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+  background: linear-gradient(135deg, rgba(155, 89, 182, 0.8) 0%, rgba(142, 68, 173, 0.8) 100%);
+  border-color: rgba(155, 89, 182, 0.4);
 }
 
 .upload-btn:hover {
@@ -969,18 +1108,19 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* 搜索浮层样式 */
 .search-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  height: 60px; /* 顶部栏区域高度 */
-  background: white;
+  height: 64px;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(16px);
   z-index: 2001;
   display: flex;
   align-items: center;
-  padding: 0 8px; /* 稍微减小内边距 */
-  box-sizing: border-box; /* 确保 padding 不会撑大 width */
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 0 16px;
+  box-sizing: border-box;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 .search-overlay-content {
@@ -1002,6 +1142,86 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
   padding: 4px;
   display: flex;
   align-items: center;
+}
+
+/* 抽屉内样式适配 */
+.drawer-content {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.drawer-tip {
+  color: #94a3b8;
+  font-size: 14px;
+  margin: 0;
+}
+
+.drawer-cascader {
+  width: 100% !important; /* 强制占满抽屉宽度 */
+}
+
+/* 覆盖 glass-cascader 在抽屉里的样式 */
+.drawer-cascader :deep(.el-input__wrapper) {
+  background: rgba(30, 41, 59, 0.5) !important;
+  border: 1px solid rgba(148, 163, 184, 0.2) !important;
+}
+
+.drawer-note {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 8px;
+}
+
+/* 当前选中分类的标签显示 */
+.current-category-display {
+  display: flex;
+  align-items: center;
+}
+
+.category-tag {
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  color: #a5b4fc;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* 侧边栏抽屉全局样式覆盖 */
+:global(.category-drawer) {
+  background: #0f172a !important; /* 深蓝色背景 */
+  border-right: 1px solid rgba(99, 102, 241, 0.2) !important;
+}
+
+:global(.category-drawer .el-drawer__header) {
+  margin-bottom: 0 !important;
+  padding: 20px !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #f1f5f9;
+}
+
+:global(.category-drawer .el-drawer__title) {
+  color: #f1f5f9;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+:global(.category-drawer .el-drawer__body) {
+  padding: 0 !important;
 }
 
 @media (max-width: 768px) {
@@ -1050,5 +1270,73 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
   .mobile-btn-group {
     flex-shrink: 0;
   }
+}
+/* 强制覆盖 el-cascader 面板样式以适应抽屉 */
+/* 强制覆盖 el-cascader 面板样式以适应抽屉 */
+:global(.category-drawer .el-cascader-panel) {
+  width: 100% !important;
+  display: flex !important;
+  background: transparent !important;
+  border: none !important;
+}
+
+:global(.category-drawer .el-cascader-menu) {
+  width: 50% !important;
+  min-width: unset !important;
+  flex: 1 1 50% !important;
+  box-sizing: border-box !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+  background: transparent !important; /* 确保透明，显示 drawer 背景 */
+  color: #f1f5f9 !important; /* 白色文字 */
+}
+
+:global(.category-drawer .el-cascader-menu__list) {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* 节点样式 */
+:global(.category-drawer .el-cascader-node) {
+  color: #cbd5e1 !important;
+  padding-left: 12px !important;
+  height: 40px !important;
+  line-height: 40px !important;
+}
+
+/* 节点悬停/聚焦 */
+:global(.category-drawer .el-cascader-node:not(.is-disabled):focus),
+:global(.category-drawer .el-cascader-node:not(.is-disabled):hover) {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+}
+
+/* 选中项高亮 */
+:global(.category-drawer .el-cascader-node.is-active) {
+  color: #818cf8 !important; /* Indigo-400 */
+  font-weight: 600 !important;
+  background: rgba(99, 102, 241, 0.15) !important;
+}
+
+/* 箭头颜色 */
+:global(.category-drawer .el-cascader-node__postfix) {
+  color: #94a3b8 !important;
+}
+
+/* 下拉容器定位与背景 */
+:global(.category-drawer .el-cascader__dropdown) {
+  width: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  box-shadow: none !important;
+  border: none !important;
+  background: transparent !important;
+  position: relative !important; /* 尝试相对定位，使其嵌入文档流 */
+  top: 0 !important;
+  margin: 0 !important;
+}
+
+/* 隐藏讨厌的 Popper 箭头 (菱形) */
+:global(.category-drawer .el-popper__arrow) {
+  display: none !important;
 }
 </style>

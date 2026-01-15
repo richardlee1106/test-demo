@@ -235,29 +235,159 @@ export async function sendChatMessage(messages, options = {}) {
 }
 
 /**
- * 语义搜索 - 调用后端 API
- * @param {string} keyword - 用户搜索关键词
- * @param {Array} features - 所有 POI 的 GeoJSON Feature 数组
- * @param {Object} options - 可选配置
- * @returns {Promise<Array>} 语义相关的 POI 数组
+ * 快速搜索（简单名词查询，绕过 LLM）
+ * @param {string} keyword - 搜索关键词
+ * @param {Object} options - 搜索选项
+ * @returns {Promise<{ success: boolean, isComplex: boolean, pois: Array }>}
  */
+export async function quickSearch(keyword, options = {}) {
+  const { spatialContext, colorIndex = 0 } = options;
+  const kw = keyword.trim();
+  
+  console.log(`[QuickSearch] 快速搜索: "${kw}"`);
+  console.log(`[QuickSearch] 空间上下文:`, spatialContext);
+  
+  // 构建查询参数
+  const params = new URLSearchParams({ q: kw, limit: '100' });
+  
+  // ========== 核心业务逻辑 ==========
+  // 1. 有选区（多边形/圆形）→ 必须在选区内搜索
+  // 2. 无选区 → 使用当前地图视野 (viewport) 作为边界
+  // 3. 任何情况都必须有空间约束，不允许全库搜索
+  
+  let hasGeometry = false;
+  
+  // 优先级1: 用户绘制的多边形选区
+  if (spatialContext?.boundary && spatialContext.boundary.length >= 3) {
+    const points = spatialContext.boundary;
+    const closedPoints = [...points];
+    // 确保多边形闭合
+    if (points[0][0] !== points[points.length-1][0] || points[0][1] !== points[points.length-1][1]) {
+      closedPoints.push(points[0]);
+    }
+    const wktPoints = closedPoints.map(p => `${p[0]} ${p[1]}`).join(', ');
+    params.set('geometry', `POLYGON((${wktPoints}))`);
+    hasGeometry = true;
+    console.log(`[QuickSearch] 使用多边形选区 (${points.length} 点)`);
+  }
+  // 优先级2: 地图视野 bbox
+  else if (spatialContext?.viewport && Array.isArray(spatialContext.viewport) && spatialContext.viewport.length >= 4) {
+    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport;
+    // 将 bbox 转换为 WKT Polygon
+    const bboxWkt = `POLYGON((${minLon} ${minLat}, ${maxLon} ${minLat}, ${maxLon} ${maxLat}, ${minLon} ${maxLat}, ${minLon} ${minLat}))`;
+    params.set('geometry', bboxWkt);
+    hasGeometry = true;
+    console.log(`[QuickSearch] 使用地图视野 bbox`);
+  }
+  
+  // 添加中心点（用于距离排序）
+  if (spatialContext?.center) {
+    params.set('lat', spatialContext.center.lat);
+    params.set('lon', spatialContext.center.lon);
+  } else if (spatialContext?.viewport) {
+    // 使用视野中心
+    const [minLon, minLat, maxLon, maxLat] = spatialContext.viewport;
+    params.set('lat', ((minLat + maxLat) / 2).toString());
+    params.set('lon', ((minLon + maxLon) / 2).toString());
+  }
+  
+  // 如果没有空间约束，警告并返回空结果
+  if (!hasGeometry) {
+    console.warn(`[QuickSearch] 警告: 没有空间边界约束，拒绝执行全库搜索`);
+    return {
+      success: true,
+      isComplex: false,
+      pois: [],
+      warning: '请先绘制选区或确保地图视野有效'
+    };
+  }
+  
+  try {
+    const response = await fetch(`/api/search/quick?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`搜索失败: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    // 如果后端判断是复杂查询，返回标记
+    if (data.isComplex) {
+      return {
+        success: true,
+        isComplex: true,
+        pois: []
+      };
+    }
+    
+    // 设置颜色索引
+    const pois = (data.pois || []).map(poi => {
+      if (poi.properties) {
+        poi.properties._groupIndex = colorIndex;
+      }
+      return poi;
+    });
+    
+    console.log(`[QuickSearch] 快速搜索完成: ${pois.length} 条, ${data.duration_ms}ms`);
+    
+    return {
+      success: true,
+      isComplex: false,
+      expandedTerms: data.expandedTerms,
+      pois
+    };
+  } catch (err) {
+    console.error('[QuickSearch] 错误:', err);
+    return {
+      success: false,
+      isComplex: false,
+      error: err.message,
+      pois: []
+    };
+  }
+}
+
 /**
- * 语义搜索 - 调用后端 Spatial RAG
- * 改为使用全域感知搜索，不再局限于前端已加载的数据
+ * 智能语义搜索 - 自动路由到快速搜索或 RAG Pipeline
  * @param {string} keyword - 用户搜索关键词
  * @param {Array} features - (已弃用，保留参数兼容性)
- * @param {Object} options - 可选配置 { spatialContext: ... }
- * @returns {Promise<Array>} 语义相关的 POI 数组
+ * @param {Object} options - 可选配置 { spatialContext: ..., colorIndex: ... }
+ * @returns {Promise<{ pois: Array, isComplex: boolean, needsAiAssistant: boolean }>}
  */
 export async function semanticSearch(keyword, features = [], options = {}) {
   if (!keyword || !keyword.trim()) {
-    return []
+    return { pois: [], isComplex: false, needsAiAssistant: false };
   }
 
-  const kw = keyword.trim()
-  console.log(`[AI Search] 全域语义搜索: "${kw}"`)
+  const kw = keyword.trim();
+  console.log(`[AI Search] 语义搜索: "${kw}"`);
 
-  let matchedPOIs = []
+  // 1. 先尝试快速搜索
+  const quickResult = await quickSearch(kw, options);
+  
+  // 2. 如果后端判断是复杂查询，需要走 AI 助手
+  if (quickResult.isComplex) {
+    console.log(`[AI Search] 复杂查询，需要 AI 助手处理`);
+    return {
+      pois: [],
+      isComplex: true,
+      needsAiAssistant: true
+    };
+  }
+  
+  // 3. 快速搜索成功
+  if (quickResult.success && quickResult.pois.length > 0) {
+    return {
+      pois: quickResult.pois,
+      isComplex: false,
+      needsAiAssistant: false,
+      expandedTerms: quickResult.expandedTerms
+    };
+  }
+  
+  // 4. 快速搜索无结果，降级到 RAG Pipeline
+  console.log(`[AI Search] 快速搜索无结果，尝试 RAG Pipeline`);
+  
+  let matchedPOIs = [];
 
   // 复用 RAG 管道进行搜索
   await sendChatMessageStream(
@@ -275,12 +405,12 @@ export async function semanticSearch(keyword, features = [], options = {}) {
          matchedPOIs = data;
       }
     }
-  )
+  );
 
-  console.log(`[AI Search] 搜索完成，找到 ${matchedPOIs.length} 个结果`)
+  console.log(`[AI Search] RAG 搜索完成，找到 ${matchedPOIs.length} 个结果`);
   
   // 转换为 GeoJSON Feature 格式 (如果后端返回的是 raw object)
-  return matchedPOIs.map(p => {
+  const pois = matchedPOIs.map(p => {
     // 如果已经是 Feature 结构就不动，否则包装一下
     if (p.type === 'Feature') {
         // 确保颜色正确
@@ -303,8 +433,14 @@ export async function semanticSearch(keyword, features = [], options = {}) {
           type: 'Point',
           coordinates: [p.lon, p.lat]
        }
-    }
+    };
   });
+  
+  return {
+    pois,
+    isComplex: false,
+    needsAiAssistant: false
+  };
 }
 
 /**

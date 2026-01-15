@@ -1,0 +1,68 @@
+# GeoLoom-RAG 生产环境部署配置
+# 包含：后端 API + 空间数据库 (PostGIS + pgvector)
+#
+# 使用方法：
+# 1. 本地导出数据：pg_dump -h localhost -U postgres geoloom > backup.sql
+# 2. 上传到服务器：scp -r deploy/ user@server:/home/user/geoloom
+# 3. 启动服务：docker-compose up -d
+# 4. 导入数据：docker exec -i geoloom-db psql -U postgres geoloom < backup.sql
+
+version: '3.8'
+
+services:
+  # ==================== 数据库服务 ====================
+  db:
+    image: kartoza/postgis:16-3.4
+    container_name: geoloom-db
+    shm_size: '2gb'            # <--- 正确的位置：在 environment 外面
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-geoloom2026}
+      POSTGRES_DB: geoloom
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,pg_trgm
+    ports:
+      - "5432:5432"
+    volumes:
+      # 数据持久化
+      - db_data:/var/lib/postgresql/data
+      # 初始化脚本（安装 pgvector）
+      - ./docker-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - geoloom-network
+
+    # ==================== 后端 API 服务 ====================
+  api:
+    # 之前是 build: ... 这一大段，请全部删掉或注释掉
+    image: geoloom-api:latest  # <--- 改成这一行，直接用我们传上去的“成品”镜像
+    container_name: geoloom-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 数据库连接
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-geoloom2026}@db:5432/geoloom
+      # LLM 配置（云端智谱 GLM）
+      GLM_API_KEY: ${GLM_API_KEY}
+      LOCAL_LLM_MODEL: qwen3-8b-instruct
+      # 服务端口
+      PORT: 3000
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    networks:
+      - geoloom-network
+
+volumes:
+  db_data:
+    driver: local
+
+networks:
+  geoloom-network:
+    driver: bridge
