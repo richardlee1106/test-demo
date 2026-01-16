@@ -23,8 +23,15 @@ export async function initDatabase() {
     database: process.env.POSTGRES_DATABASE || 'geoloom',
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 5000, // 增加超时时间到 5000ms
   };
+
+  // Vercel / Remote DB 可能需要 SSL
+  if (process.env.SSL_MODE) {
+    dbConfig.ssl = {
+      rejectUnauthorized: false
+    };
+  }
   
   pool = new Pool(dbConfig);
   
