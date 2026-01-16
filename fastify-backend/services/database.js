@@ -165,7 +165,9 @@ export async function findPOIsWithinRadius(lon, lat, radiusMeters, filters = {})
   }
   
   sql += ` ORDER BY distance_meters LIMIT $${paramIndex}`;
-  params.push(limit > 2000 ? limit : 20000); // 强制将默认下限提升到 20000
+  // 核心修改：用户想要全量数据，我们将默认上限提升到 50万
+  // 只要前端敢要，后端就敢给
+  params.push(limit > 2000 ? limit : 500000);
   
   const result = await query(sql, params);
   
