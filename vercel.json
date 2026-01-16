@@ -1,18 +1,4 @@
 {
-  "rewrites": [
-    {
-      "source": "/api/ai/:path*",
-      "destination": "/api/ai/:path*"
-    },
-    {
-      "source": "/api/spatial/:path*",
-      "destination": "/api/spatial/:path*"
-    },
-    {
-      "source": "/api/category/:path*",
-      "destination": "/api/category/:path*"
-    }
-  ],
   "headers": [
     {
       "source": "/api/(.*)",
