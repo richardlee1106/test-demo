@@ -1,4 +1,9 @@
-import db from '../services/database.js';
+import db from './database.js';
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * 从数据库动态生成分类树
@@ -18,8 +23,17 @@ export async function getCategoryTreeFromDB() {
     const result = await db.query(sql);
     const rows = result.rows;
     
-    const tree = [];
-    const map = {};
+    if (rows.length === 0) {
+      console.log('⚠️ Database is empty, falling back to catalog.json');
+      const catalogPath = path.resolve(__dirname, '../../public/split_data/catalog.json');
+      try {
+        const data = await fs.readFile(catalogPath, 'utf8');
+        return JSON.parse(data);
+      } catch (err) {
+        console.error('Fallback to catalog.json failed:', err);
+        return [];
+      }
+    }
     
     rows.forEach(row => {
       const { big, mid, small } = row;

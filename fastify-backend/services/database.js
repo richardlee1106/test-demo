@@ -20,7 +20,7 @@ export async function initDatabase() {
     port: parseInt(process.env.POSTGRES_PORT) || 5432,
     user: process.env.POSTGRES_USER || 'postgres',
     password: process.env.POSTGRES_PASSWORD || '123456',
-    database: process.env.POSTGRES_DATABASE || 'tagcloud',
+    database: process.env.POSTGRES_DATABASE || 'geoloom',
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,

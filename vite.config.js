@@ -11,10 +11,14 @@ export default defineConfig({
         changeOrigin: true,
         timeout: 120000,
       },
+      '/api/category': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
       '/api/spatial': {
         target: 'http://localhost:3000',
         changeOrigin: true,
-        timeout: 60000,
+        timeout: 120000,
       },
       '/api/search': {
         target: 'http://localhost:3000',
