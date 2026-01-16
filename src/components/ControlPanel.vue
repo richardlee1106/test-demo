@@ -322,9 +322,34 @@ const fullCategoryOptions = ref([]);
 // 加载分类目录
 onMounted(async () => {
   try {
-    const res = await fetch('/api/category/tree');
-    if (res.ok) {
-      const fullData = (await res.json()).reverse();
+    // 优先加载静态 JSON (Static Fallback) - 这在 Vercel 环境下极快且稳定
+    let fullData = null;
+    try {
+      const staticRes = await fetch('/split_data/catalog_full.json');
+      if (staticRes.ok) {
+        fullData = await staticRes.json();
+        console.log('✅ Loaded catalog from static file (Fast & Reliable)');
+      }
+    } catch (e) {
+      console.warn('Static catalog not found, trying API...');
+    }
+    
+    // 如果静态加载失败，再尝试 API (作为备份)
+    if (!fullData) {
+      const res = await fetch('/api/category/tree');
+      if (res.ok) {
+        fullData = (await res.json()).reverse();
+      } else {
+        throw new Error('All catalog sources failed');
+      }
+    } else {
+       // 静态数据可能需要 reverse 以匹配之前的显示逻辑（如果后端也是 reverse 的话）
+       // 但通常后端返回的顺序如果是对的，就不需要 reverse。
+       // 假设本地生成的顺序已经是最终顺序，这里保持一致
+       fullData = fullData.reverse(); 
+    }
+
+    if (fullData) {
       fullCategoryOptions.value = fullData;
       
       // 仅供 UI 显示的选项：截断到第2级（中类），隐藏第3级（小类）
@@ -336,11 +361,10 @@ onMounted(async () => {
           leaf: true      // 显式标记为叶子
         }))
       }));
-    } else {
-      console.error('Failed to load category catalog');
     }
   } catch (error) {
     console.error('Error loading catalog:', error);
+    ElMessage.error('无法加载分类数据，请检查网络');
   }
 });
 

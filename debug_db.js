@@ -15,6 +15,10 @@ async function test() {
     const tree = await getCategoryTreeFromDB();
     out += `Category tree top level nodes: ${tree.length}\n`;
     
+    // Save full catalog to public for static fallback
+    fs.writeFileSync('./public/split_data/catalog_full.json', JSON.stringify(tree, null, 2));
+    out += 'Saved full catalog to ./public/split_data/catalog_full.json\n';
+    
     const pool = getPool();
     const countRes = await pool.query('SELECT count(*) FROM pois');
     out += `POI count in table 'pois': ${countRes.rows[0].count}\n`;
