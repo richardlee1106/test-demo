@@ -159,12 +159,13 @@ export async function findPOIsWithinRadius(lon, lat, radiusMeters, filters = {})
   // 类别过滤
   if (category) {
     sql += ` AND (p.type ILIKE $${paramIndex} OR p.category_mid ILIKE $${paramIndex} OR p.category_small ILIKE $${paramIndex})`;
+    // 为模糊匹配前后都加 %，确保能搜到 "中餐厅" 即使数据库里是 "中餐" 也能尽量匹配（反之亦然）
     params.push(`%${category}%`);
     paramIndex++;
   }
   
   sql += ` ORDER BY distance_meters LIMIT $${paramIndex}`;
-  params.push(limit);
+  params.push(limit > 2000 ? limit : 20000); // 强制将默认下限提升到 20000
   
   const result = await query(sql, params);
   

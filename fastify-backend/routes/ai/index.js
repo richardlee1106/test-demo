@@ -48,10 +48,13 @@ async function aiRoutes(fastify, options) {
       await fetch(`${localApiBase}/models`, { signal: controller.signal })
       clearTimeout(timeout)
       
+      // 如果 localhost 可访问，才认为是本地（避免云端地址被误判）
+      const isLocalhost = localApiBase.includes('localhost') || localApiBase.includes('127.0.0.1')
+      
       return { 
         online: true, 
-        provider: 'local', 
-        providerName: 'Local LM Studio',
+        provider: isLocalhost ? 'local' : 'glm', 
+        providerName: isLocalhost ? 'Local LM Studio' : 'GLM',
         architecture: 'three-stage-spatial-rag'
       }
     } catch (e) {
@@ -59,7 +62,7 @@ async function aiRoutes(fastify, options) {
         return { 
           online: true, 
           provider: 'glm', 
-          providerName: 'Cloud AI (GLM)',
+          providerName: 'GLM',
           architecture: 'three-stage-spatial-rag'
         }
       }
