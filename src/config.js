@@ -4,6 +4,6 @@
 
 export const API_BASE_URL = import.meta.env.DEV 
   ? '' 
-  : 'http://211.154.18.253:10013'; // 您的服务器公网地址
+  : 'https://211.154.18.253:8443'; // 您的服务器公网地址
 
 export default API_BASE_URL;
