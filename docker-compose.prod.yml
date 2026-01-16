@@ -1,0 +1,53 @@
+# GeoLoom-RAG 全栈部署配置
+# 包含：
+# 1. Spatial DB (PostGIS + pgvector)
+# 2. Backend API (Node.js Fastify)
+
+services:
+  # 数据库服务 (保持原有配置)
+  spatial-db:
+    image: kartoza/postgis:16-3.4
+    container_name: geoloom-spatial-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Nishiwodeubuntu2002
+      POSTGRES_DB: geoloom
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,pg_trgm
+    ports:
+      - "10013:5432" # 外部访问端口保持 10013
+    volumes:
+      - spatial_db_data:/var/lib/postgresql/data
+      - ./docker-init-spatial:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 后端服务 (新增)
+  backend:
+    build: ./fastify-backend
+    container_name: geoloom-backend
+    restart: unless-stopped
+    depends_on:
+      spatial-db:
+        condition: service_healthy
+    environment:
+      # 这里的 host 填 'spatial-db' (Docker 内部域名)
+      POSTGRES_HOST: spatial-db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: Nishiwodeubuntu2002
+      POSTGRES_DATABASE: geoloom
+      # AI 服务配置 (请确保填入您的真实 Key)
+      LLM_BASE_URL: https://open.bigmodel.cn/api/paas/v4/chat/completions
+      LLM_MODEL: glm-4
+      GLM_API_KEY: ${GLM_API_KEY} 
+      # 也可以从 .env 文件读取
+    ports:
+      - "3000:3000" # 暴露 3000 端口给前端调用
+
+volumes:
+  spatial_db_data:
+    driver: local
