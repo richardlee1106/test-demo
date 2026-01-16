@@ -278,6 +278,7 @@
 import { ref, computed, watch, onBeforeUnmount, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
+import { API_BASE_URL } from '../config';
 
 const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded']);
 // const selectedGroup = ref(''); // Replace with array path
@@ -336,7 +337,7 @@ onMounted(async () => {
     
     // 如果静态加载失败，再尝试 API (作为备份)
     if (!fullData) {
-      const res = await fetch('/api/category/tree');
+      const res = await fetch(`${API_BASE_URL}/api/category/tree`);
       if (res.ok) {
         fullData = (await res.json()).reverse();
       } else {
@@ -445,7 +446,8 @@ const handleCascaderChange = () => {
   dataWorker.value.postMessage({
     categories: selectedCategories,
     name: path.join(' > '),
-    limit: 2000 // 词云通常需要较多数据
+    limit: 2000, // 词云通常需要较多数据
+    baseUrl: API_BASE_URL // 传递 API 基础路径
   });
 };
 

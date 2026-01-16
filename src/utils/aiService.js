@@ -8,7 +8,9 @@
  */
 
 // 后端 API 基础路径
-const API_BASE = '/api/ai'
+// 后端 API 基础路径
+import { API_BASE_URL } from '../config';
+const API_BASE = `${API_BASE_URL}/api/ai`;
 
 // 当前服务商信息（从后端获取）
 let currentProvider = {
@@ -303,7 +305,7 @@ export async function quickSearch(keyword, options = {}) {
   }
   
   try {
-    const response = await fetch(`/api/search/quick?${params.toString()}`);
+    const response = await fetch(`${API_BASE_URL}/api/search/quick?${params.toString()}`);
     if (!response.ok) {
       throw new Error(`搜索失败: ${response.status}`);
     }
