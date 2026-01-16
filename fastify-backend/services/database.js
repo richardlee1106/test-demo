@@ -21,9 +21,10 @@ export async function initDatabase() {
     user: process.env.POSTGRES_USER || 'postgres',
     password: process.env.POSTGRES_PASSWORD || '123456',
     database: process.env.POSTGRES_DATABASE || 'geoloom',
-    max: 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000, // 增加超时时间到 5000ms
+    max: 1, // Serverless 环境下不建议使用连接池，限制为1个连接
+    connectionTimeoutMillis: 10000, // 给予更充分的连接时间 (10s)
+    idleTimeoutMillis: 0, // 禁止空闲断开
+    query_timeout: 45000, // 单个查询给足45秒
   };
 
   // Vercel / Remote DB 可能需要 SSL
@@ -34,6 +35,12 @@ export async function initDatabase() {
   }
   
   pool = new Pool(dbConfig);
+  
+  // 错误处理：防止 Pool 层面崩溃导致应用挂掉
+  pool.on('error', (err, client) => {
+    console.error('Unexpected error on idle client', err);
+    // don't throw error here to keep the process alive
+  });
   
   // 测试连接
   try {
