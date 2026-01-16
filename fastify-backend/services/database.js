@@ -153,6 +153,13 @@ export async function findPOIsWithinRadius(lon, lat, radiusMeters, filters = {})
   params.push(limit);
   
   const result = await query(sql, params);
+  
+  if (result.rows.length < 50 && categories.length > 0) {
+     console.log('⚠️ Low result count detected!');
+     console.log('SQL:', sql);
+     console.log('Params:', params);
+  }
+  
   return result.rows;
 }
 
@@ -596,12 +603,19 @@ export async function findPOIsFiltered(options) {
   
   // 类别过滤
   if (categories.length > 0) {
-    const categoryConditions = categories.map((_, i) => {
+     const categoryConditions = categories.map((_, i) => {
       const idx = paramIndex + i;
-      return `(p.type ILIKE $${idx} OR p.category_mid ILIKE $${idx} OR p.category_small ILIKE $${idx} OR p.category_big ILIKE $${idx})`;
+      // 这里的逻辑是：用户选的类别可能是 中类，也可能是 小类
+      // 所以我们要把用户输入的值，同时去匹配数据库里的 category_mid 和 category_small
+      // 甚至 type 字段（为了兼容旧数据）
+      return `(
+        p.category_small ILIKE $${idx} 
+        OR p.category_mid ILIKE $${idx} 
+        OR p.type ILIKE $${idx}
+      )`;
     });
     sql += ` AND (${categoryConditions.join(' OR ')})`;
-    categories.forEach(cat => params.push(`%${cat}%`));
+    categories.forEach(cat => params.push(`%${cat}%`)); // 使用模糊匹配
     paramIndex += categories.length;
   }
   
@@ -623,8 +637,8 @@ export async function findPOIsFiltered(options) {
   params.push(limit);
   
   try {
-    console.log(`[DB Debug ${Date.now()}] SQL:`, sql);
-    console.log(`[DB Debug ${Date.now()}] Params:`, JSON.stringify(params));
+    // console.log('[DB SQL]', sql); // Debug logging
+    // console.log('[DB Params]', params); 
     const result = await query(sql, params);
     
     if (result.rows.length === 0 && categories.length > 0) {

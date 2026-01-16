@@ -385,11 +385,15 @@ const handleCascaderChange = () => {
     dataWorker.value.onmessage = (e) => {
       const { success, name, features, error } = e.data;
       if (success) {
-        ElMessage.success(`成功加载！共 ${features.length} 个 POI`);
+        if (features.length === 0) {
+           ElMessage.warning(`该分类下暂无数据`);
+        } else {
+           ElMessage.success(`加载成功: ${name} (共 ${features.length} 条)`);
+        }
         emit('data-loaded', { success: true, name, features });
       } else {
         console.error(error);
-        ElMessage.error(`加载失败！${name}`);
+        ElMessage.error(`加载失败: ${error || '未知错误'}`);
         emit('data-loaded', { success: false, name, features: [] });
       }
       emit('loading-change', false);
