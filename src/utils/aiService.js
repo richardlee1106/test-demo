@@ -147,9 +147,10 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
 
   // 获取当前使用的服务商
   const provider = response.headers.get('X-AI-Provider')
+  const providerName = response.headers.get('X-AI-Provider-Name')
   if (provider) {
     currentProvider.provider = provider
-    currentProvider.providerName = provider === 'local' ? 'Local LM Studio' : 'Xiaomi MiMo'
+    currentProvider.providerName = providerName || (provider === 'local' ? 'Local LM Studio' : 'Cloud AI (GLM)')
   }
 
   const reader = response.body.getReader()

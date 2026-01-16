@@ -446,7 +446,7 @@ const handleCascaderChange = () => {
   dataWorker.value.postMessage({
     categories: selectedCategories,
     name: path.join(' > '),
-    limit: 2000, // 词云通常需要较多数据
+    limit: 50000, // 不再限制在 2000，支持加载全量数据
     baseUrl: API_BASE_URL // 传递 API 基础路径
   });
 };

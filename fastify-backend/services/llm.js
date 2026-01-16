@@ -205,14 +205,13 @@ export function refreshLocalStatus() {
 }
 
 /**
- * 获取当前 LLM 状态
+ * 获取当前活动的 Provider 信息
  */
-export function getLLMStatus() {
+export async function getActiveProviderInfo() {
+  const isLocal = await checkLocalAvailable()
   return {
-    localAvailable,
-    lastCheckTime,
-    localConfig: LOCAL_CONFIG,
-    cloudConfig: { ...CLOUD_CONFIG, apiKey: CLOUD_CONFIG.apiKey ? '***' : '' },
+    provider: isLocal ? 'local' : 'glm',
+    providerName: isLocal ? 'Local LM Studio' : 'GLM'
   }
 }
 
@@ -223,4 +222,5 @@ export default {
   generateEmbedding,
   refreshLocalStatus,
   getLLMStatus,
+  getActiveProviderInfo
 }

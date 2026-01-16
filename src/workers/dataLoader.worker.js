@@ -1,6 +1,6 @@
 // Web Worker 用于从后端 API 加载 POI 数据
 self.onmessage = async (e) => {
-  const { categories, name, bounds, limit = 2000, baseUrl = '' } = e.data;
+  const { categories, name, bounds, limit = 100000, baseUrl = '' } = e.data;
 
   try {
     const response = await fetch(`${baseUrl}/api/spatial/fetch`, {

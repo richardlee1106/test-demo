@@ -4,6 +4,6 @@
 
 export const API_BASE_URL = import.meta.env.DEV 
   ? '' 
-  : '/proxy-api'; // 您的服务器公网地址通过 Vercel Rewrite 代理
+  : '/proxy-api'; // 服务器公网地址通过 Vercel Rewrite 代理
 
 export default API_BASE_URL;

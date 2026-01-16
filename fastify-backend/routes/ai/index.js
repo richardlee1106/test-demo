@@ -134,12 +134,18 @@ async function aiRoutes(fastify, options) {
         architecture: 'three-stage'
       })
 
+      // 获取当前服务商信息
+      const { getActiveProviderInfo } = await import('../../services/llm.js')
+      const providerInfo = await getActiveProviderInfo()
+
       // 设置 SSE 响应头
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',
+        'X-AI-Provider': providerInfo.provider,
+        'X-AI-Provider-Name': providerInfo.providerName,
         'X-Accel-Buffering': 'no' // 禁用 nginx 缓冲
       })
 

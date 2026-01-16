@@ -538,7 +538,7 @@ ${context}
    * 根据类别列表获取 POI（源自 PostGIS）
    */
   fastify.post('/fetch', async (request, reply) => {
-    const { categories, limit = 1000, bounds } = request.body;
+    const { categories, limit = 100000, bounds } = request.body;
     
     if (!categories || !Array.isArray(categories)) {
       return reply.code(400).send({ error: '缺少 categories 数组' });

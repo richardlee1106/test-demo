@@ -28,13 +28,7 @@ const fastify = Fastify({
 
 // 注册 CORS 插件
 await fastify.register(cors, {
-  // 允许的前端域名 (替换为您的 Vercel 域名)
-  origin: [
-    /https:\/\/.*\.vercel\.app/, 
-    /https:\/\/.*\.lzgis\.xyz/,
-    'http://localhost:5173',
-    'http://localhost:3000'
-  ],
+  origin: true,
   methods: ['GET', 'POST', 'OPTIONS'],
   credentials: true
 })
