@@ -25,7 +25,32 @@ export async function callLLM(prompt, options = {}) {
     
     return await response.json();
   } catch (err) {
-    console.error('[AI Service] LLM call failed:', err.message);
+    console.warn('[AI Service] Local/Primary LLM failed, trying GLM fallback...', err.message);
+    
+    // Fallback to Zhipu GLM if API Key is present
+    if (process.env.GLM_API_KEY) {
+      try {
+        const glmResponse = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.GLM_API_KEY}`
+          },
+          body: JSON.stringify({
+            model: 'glm-4',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: options.temperature || 0.3
+          })
+        });
+        
+        if (!glmResponse.ok) throw new Error(`GLM API error: ${glmResponse.status}`);
+        return await glmResponse.json();
+      } catch (glmErr) {
+        console.error('[AI Service] GLM fallback also failed:', glmErr.message);
+        throw err; // Throw original error if both fail
+      }
+    }
+    
     throw err;
   }
 }
