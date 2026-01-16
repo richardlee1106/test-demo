@@ -1,0 +1,30 @@
+# GeoLoom-RAG 完整空间数据库
+# 基于 kartoza/postgis + 手动安装 pgvector
+
+services:
+  spatial-db:
+    image: kartoza/postgis:16-3.4
+    container_name: geoloom-spatial-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: geoloom
+      # 允许扩展安装
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,pg_trgm
+    ports:
+      - "5432:5432"
+    volumes:
+      # 数据持久化
+      - spatial_db_data:/var/lib/postgresql/data
+      # 初始化脚本（安装 pgvector）
+      - ./docker-init-spatial:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  spatial_db_data:
+    driver: local

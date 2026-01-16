@@ -1,0 +1,48 @@
+{
+  "name": "vite-project",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev:frontend": "vite",
+    "dev:backend": "cd fastify-backend && npm run dev",
+    "dev:all": "npx concurrently \"npm run dev:frontend\" \"npm run dev:backend\"",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.2.5",
+    "@deck.gl/core": "^9.2.5",
+    "@deck.gl/layers": "^9.2.5",
+    "@deck.gl/mesh-layers": "^9.2.5",
+    "@luma.gl/core": "^9.2.5",
+    "@luma.gl/webgl": "^9.2.5",
+    "@mdi/font": "^7.4.47",
+    "@turf/boolean-point-in-polygon": "^7.3.1",
+    "@turf/centroid": "^7.3.1",
+    "@turf/helpers": "^7.3.1",
+    "@types/d3": "^7.4.3",
+    "axios": "^1.13.2",
+    "d3": "^7.9.0",
+    "d3-cloud": "^1.2.7",
+    "element-plus": "^2.13.1",
+    "fabric": "^6.9.1",
+    "geotiff": "^2.1.4-beta.1",
+    "ol": "^10.7.0",
+    "pixi.js": "^8.14.3",
+    "rbush": "^4.0.1",
+    "regl": "^2.1.1",
+    "sass": "^1.97.2",
+    "vite-plugin-vuetify": "^2.1.2",
+    "vue": "^3.5.22",
+    "vuetify": "^3.11.6"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.1.7"
+  },
+  "engines": {
+    "node": "20.x"
+  }
+}

@@ -1,0 +1,46 @@
+﻿# === Node.js & Vite ===
+node_modules
+dist
+dist-ssr
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# === Local Data (DO NOT UPLOAD) ===
+public/split_data/
+public/data/*.geojson
+public/data/*.tif
+public/data/*.7z
+public/data/*.zip
+
+# === Environment & Secrets ===
+.env
+fastify-backend/.env
+
+# === Logs & Debugging ===
+logs
+*.log
+RAG_LOG/
+debug_output*.txt
+check_output.txt
+result_categories.json
+
+# === Tools & Nginx ===
+nginx-1.28.1/
+benchmark/
+*.vbs
+start-*.bat
+stop-*.bat
+
+# === IDE ===
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.sln
+
+# === Docker ===
+volumes/

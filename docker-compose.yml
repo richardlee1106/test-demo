@@ -1,0 +1,5 @@
+# TagCloud Spatial-RAG 依赖服务
+# 使用方法: docker-compose -f docker-compose.spatial.yml up -d
+
+# 提示：原始 Milvus 容器已移除，当前系统已全面切换至 PostgreSQL + pgvector 架构。
+# 请使用 docker-compose.spatial.yml 启动核心数据库服务。

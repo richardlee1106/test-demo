@@ -1,0 +1,26 @@
+{
+  "name": "geoloom-rag-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GeoLoom-RAG 空间智能后端服务 (PostgreSQL + PostGIS + pgvector)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "migrate:vectors": "node scripts/migrate_to_pgvector.js",
+    "verify:vectors": "node scripts/verify_vectors.js",
+    "import:pois": "node scripts/import_poi_data.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "dotenv": "^16.5.0",
+    "fastify": "^5.3.0",
+    "glob": "^13.0.0",
+    "latlon-geohash": "^2.0.0",
+    "openai": "^6.16.0",
+    "pg": "^8.16.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
