@@ -534,6 +534,56 @@ ${context}
   });
   
   /**
+   * POST /api/spatial/fetch
+   * 根据类别列表获取 POI（源自 PostGIS）
+   */
+  fastify.post('/fetch', async (request, reply) => {
+    const { categories, limit = 1000, bounds } = request.body;
+    
+    if (!categories || !Array.isArray(categories)) {
+      return reply.code(400).send({ error: '缺少 categories 数组' });
+    }
+
+    try {
+      let geometry = null;
+      if (bounds) {
+        // bounds: [minLon, minLat, maxLon, maxLat]
+        const [w, s, e, n] = bounds;
+        geometry = `POLYGON((${w} ${s}, ${e} ${s}, ${e} ${n}, ${w} ${n}, ${w} ${s}))`;
+      }
+
+      const results = await db.findPOIsFiltered({
+        categories,
+        geometry,
+        limit
+      });
+
+      return {
+        success: true,
+        count: results.length,
+        features: results.map(p => ({
+          type: 'Feature',
+          id: p.id || p.poiid,
+          geometry: {
+            type: 'Point',
+            coordinates: [parseFloat(p.lon), parseFloat(p.lat)]
+          },
+          properties: {
+            name: p.name,
+            address: p.address,
+            type: p.type,
+            category_mid: p.category_mid,
+            category_small: p.category_small,
+          }
+        }))
+      };
+    } catch (error) {
+      fastify.log.error(error);
+      return reply.code(500).send({ error: 'Fetch failed', details: error.message });
+    }
+  });
+
+  /**
    * GET /api/spatial/status
    * 服务状态检查
    */

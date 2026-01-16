@@ -322,13 +322,12 @@ const fullCategoryOptions = ref([]);
 // 加载分类目录
 onMounted(async () => {
   try {
-    const res = await fetch('/split_data/catalog.json');
+    const res = await fetch('/api/category/tree');
     if (res.ok) {
       const fullData = (await res.json()).reverse();
       fullCategoryOptions.value = fullData;
       
       // 仅供 UI 显示的选项：截断到第2级（中类），隐藏第3级（小类）
-      // 使用递归或映射来构建新的树
       categoryOptions.value = fullData.map(l1 => ({
         ...l1,
         children: l1.children?.map(l2 => ({
@@ -403,32 +402,22 @@ const handleCascaderChange = () => {
     };
   }
 
-  // 1. 找到选中的节点 - 注意：这里必须使用 fullCategoryOptions (包含3级结构) 来查找
-  // 因为 path 是 [大类, 中类]，我们需要从全量数据中找到对应的中类节点，它下面包含了小类
+  // 1. 找到选中的节点
   const selectedNode = findNode(fullCategoryOptions.value, path);
-  
   if (!selectedNode) {
     emit('loading-change', false);
     return;
   }
 
-  // 2. 获取该节点下所有叶子节点（如果是叶子节点则只包含自己）
-  // 此时 selectedNode 是真实的"中类"节点，它包含"小类"children
+  // 2. 获取该节点下所有叶子节点的名称（作为类别进行数据库查询）
   const leafPaths = getAllLeafPaths(selectedNode, path);
-
-  // 3. 构建 URL 列表
-  // 路径格式: [大类, 中类, 小类] -> /split_data/大类/中类/小类.geojson
-  const urls = leafPaths.map(p => `/split_data/${p.join('/')}.geojson`);
+  const selectedCategories = leafPaths.map(p => p[p.length - 1]);
   
-  // 警告：如果选择了大类，可能会加载非常多的文件
-  if (urls.length > 50) {
-    ElMessage.warning(`正在加载 ${urls.length} 个子分类数据，请稍候...`);
-  }
-
-  // 4. 发送给 Worker
+  // 3. 发送给 Worker
   dataWorker.value.postMessage({
-    urls: urls,
-    name: path.join(' > ')
+    categories: selectedCategories,
+    name: path.join(' > '),
+    limit: 2000 // 词云通常需要较多数据
   });
 };
 

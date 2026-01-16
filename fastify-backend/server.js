@@ -16,6 +16,7 @@ import cors from '@fastify/cors'
 import aiRoutes from './routes/ai/index.js'
 import spatialRoutes from './routes/spatial/index.js'
 import searchRoutes from './routes/search.js'
+import categoryRoutes from './routes/category.js'
 
 // 导入服务
 import { initDatabase, closeDatabase } from './services/database.js'
@@ -35,6 +36,7 @@ await fastify.register(cors, {
 fastify.register(aiRoutes, { prefix: '/api/ai' })
 fastify.register(spatialRoutes, { prefix: '/api/spatial' })
 fastify.register(searchRoutes, { prefix: '/api/search' })
+fastify.register(categoryRoutes, { prefix: '/api/category' })
 
 // 健康检查
 fastify.get('/health', async () => {
