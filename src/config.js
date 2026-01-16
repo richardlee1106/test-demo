@@ -4,6 +4,6 @@
 
 export const API_BASE_URL = import.meta.env.DEV 
   ? '' 
-  : 'https://api.lzgis.xyz:8443'; // 您的服务器公网地址
+  : '/proxy-api'; // 您的服务器公网地址通过 Vercel Rewrite 代理
 
 export default API_BASE_URL;
