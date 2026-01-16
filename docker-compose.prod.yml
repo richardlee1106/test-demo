@@ -17,7 +17,7 @@ services:
     ports:
       - "10013:5432" # 外部访问端口保持 10013
     volumes:
-      - spatial_db_data:/var/lib/postgresql/data
+      - deploy_db_data:/var/lib/postgresql/data
       - ./docker-init-spatial:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -49,5 +49,5 @@ services:
       - "3000:3000" # 暴露 3000 端口给前端调用
 
 volumes:
-  spatial_db_data:
-    driver: local
+  deploy_db_data:
+    external: true # 关键：声明这是一个外部已经存在的卷，不要新建！
