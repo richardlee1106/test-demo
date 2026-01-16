@@ -34,6 +34,9 @@ export async function getCategoryTreeFromDB() {
         return [];
       }
     }
+
+    const tree = [];
+    const map = {};
     
     rows.forEach(row => {
       const { big, mid, small } = row;
