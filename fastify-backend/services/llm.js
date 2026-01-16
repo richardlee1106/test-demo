@@ -6,6 +6,8 @@
  * 2. 如果本地不可用，自动切换到云端 GLM-4.5-air
  */
 
+import 'dotenv/config'
+
 // 本地 LM Studio 配置
 const LOCAL_CONFIG = {
   baseUrl: 'http://localhost:1234/v1',
@@ -17,6 +19,7 @@ const LOCAL_CONFIG = {
 const CLOUD_CONFIG = {
   baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
   model: 'glm-4.5-air',
+  embeddingModel: 'embedding-3', // 智谱最新 Embedding 模型
   apiKey: process.env.GLM_API_KEY || '',
 }
 
@@ -89,14 +92,32 @@ export async function getLLMConfig() {
 }
 
 /**
+ * 获取当前应使用的 Embedding 配置
+ */
+export async function getEmbeddingConfig() {
+  const isLocal = await checkLocalAvailable()
+  
+  if (isLocal) {
+    return {
+      baseUrl: LOCAL_CONFIG.baseUrl,
+      model: process.env.LLM_EMBEDDING_MODEL || 'text-embedding-nomic-embed-text-v1.5',
+      apiKey: '',
+      isLocal: true,
+    }
+  } else {
+    return {
+      baseUrl: CLOUD_CONFIG.baseUrl,
+      model: CLOUD_CONFIG.embeddingModel,
+      apiKey: CLOUD_CONFIG.apiKey,
+      isLocal: false,
+    }
+  }
+}
+
+/**
  * 调用 LLM Chat Completions API（自动选择本地/云端）
  * 
  * @param {Object} options
- * @param {Array} options.messages - 消息数组
- * @param {number} options.temperature - 温度参数
- * @param {number} options.max_tokens - 最大 token 数
- * @param {boolean} options.stream - 是否流式输出
- * @returns {Promise<Response>}
  */
 export async function callLLM(options) {
   const config = await getLLMConfig()
@@ -121,16 +142,58 @@ export async function callLLM(options) {
   })
   
   if (!response.ok) {
-    // 如果本地失败，尝试云端兜底
     if (config.isLocal) {
       console.log('[LLM] 本地调用失败，切换到云端兜底...')
-      localAvailable = false  // 标记本地不可用
-      return callLLM(options)  // 递归调用，这次会用云端
+      localAvailable = false
+      return callLLM(options)
     }
     throw new Error(`LLM API error: ${response.status} ${response.statusText}`)
   }
   
   return response
+}
+
+/**
+ * 生成文本向量（统一本地/云端逻辑）
+ * @param {string|string[]} input 输入文本
+ */
+export async function generateEmbedding(input) {
+  const config = await getEmbeddingConfig()
+  
+  const headers = { 'Content-Type': 'application/json' }
+  if (config.apiKey) {
+    headers['Authorization'] = `Bearer ${config.apiKey}`
+  }
+  
+  try {
+    const response = await fetch(`${config.baseUrl}/embeddings`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: config.model,
+        input: input,
+      }),
+    })
+    
+    if (!response.ok) {
+      if (config.isLocal) {
+        console.log('[LLM] 本地 Embedding 失败，切换到云端...')
+        localAvailable = false
+        return generateEmbedding(input)
+      }
+      throw new Error(`Embedding API error: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    
+    if (Array.isArray(input)) {
+        return data.data.map(item => item.embedding)
+    }
+    return data.data?.[0]?.embedding
+  } catch (err) {
+    console.error('[LLM] Embedding 生成失败:', err.message)
+    return null
+  }
 }
 
 /**
@@ -155,7 +218,9 @@ export function getLLMStatus() {
 
 export default {
   getLLMConfig,
+  getEmbeddingConfig,
   callLLM,
+  generateEmbedding,
   refreshLocalStatus,
   getLLMStatus,
 }

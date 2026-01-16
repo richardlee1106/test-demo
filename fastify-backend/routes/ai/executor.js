@@ -12,6 +12,7 @@ import db from '../../services/database.js'
 import vectordb from '../../services/vectordb.js'
 import { resolveAnchor } from '../../services/geocoder.js'
 import Geohash from 'latlon-geohash'
+import { generateEmbedding } from '../../services/llm.js'
 
 /**
  * 执行器配置
@@ -549,30 +550,6 @@ async function semanticRerank(candidates, semanticQuery, topK) {
   } catch (err) {
     console.error('[Executor] 语义精排失败:', err.message)
     return candidates.slice(0, topK)
-  }
-}
-
-/**
- * 生成 Embedding
- */
-async function generateEmbedding(text) {
-  const baseUrl = process.env.LLM_BASE_URL || 'http://localhost:1234/v1'
-  const model = process.env.LLM_EMBEDDING_MODEL || 'text-embedding-nomic-embed-text-v1.5'
-  
-  try {
-    const response = await fetch(`${baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, input: text }),
-    })
-    
-    if (!response.ok) return null
-    
-    const data = await response.json()
-    return data.data?.[0]?.embedding
-  } catch (err) {
-    console.error('[Executor] Embedding 生成失败:', err.message)
-    return null
   }
 }
 
