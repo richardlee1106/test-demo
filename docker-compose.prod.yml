@@ -1,19 +1,16 @@
-version: '3.8'
-
 services:
   # 1. 空间数据库 (PostGIS + pgvector)
   spatial-db:
     image: kartoza/postgis:16-3.4
     container_name: geoloom-spatial-db
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      # 兼容您服务器 .env 中的变量名
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD}} 
-      POSTGRES_DB: ${POSTGRES_DATABASE:-geoloom}
-      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,pg_trgm
+      # 直接映射环境变量，Compose 会自动从 .env 或 shell 环境中读取同名变量
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
+      - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm
     ports:
       - "5432:5432"
     volumes:
@@ -33,19 +30,17 @@ services:
       context: ./fastify-backend
     container_name: geoloom-backend
     restart: unless-stopped
-    env_file:
-      - .env
+    env_file: .env
     environment:
-      POSTGRES_HOST: spatial-db
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-${POSTGRES_PASSWORD}}
-      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-geoloom}
-      # AI 服务配置：兼容 LOCAL_LLM_MODEL
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:1234/v1}
-      LLM_MODEL: ${LOCAL_LLM_MODEL:-${LLM_MODEL:-qwen3vl-8b-instruct}}
-      GLM_API_KEY: ${GLM_API_KEY}
-      PORT: 3000
+      - POSTGRES_HOST=spatial-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-geoloom}
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_MODEL=${LOCAL_LLM_MODEL:-qwen3vl-8b-instruct}
+      - GLM_API_KEY=${GLM_API_KEY}
+      - PORT=3000
     ports:
       - "3002:3000"
     depends_on:

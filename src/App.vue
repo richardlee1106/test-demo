@@ -50,7 +50,13 @@
                       @clear-search="handleClearSearch"
                       @save-result="handleSaveResult"
                       @category-change="selectedCategoryPath = $event"
-                      @loading-change="isLoading = $event" />
+                      @loading-change="isLoading = $event"
+                      v-model:filterEnabled="filterEnabled"
+                      v-model:heatmapEnabled="heatmapEnabled"
+                      v-model:overlayEnabled="overlayEnabled"
+                      v-model:weightEnabled="weightEnabled"
+                      v-model:showWeightValue="showWeightValue"
+                      :globalAnalysisEnabled="globalAnalysisEnabled" />
       </div>
 
       <!-- 物理中线分隔符 -->
@@ -70,7 +76,13 @@
                       @clear-search="handleClearSearch"
                       @loading-change="isLoading = $event"
                       @category-change="selectedCategoryPath = $event"
-                      :on-run-algorithm="handleRunAlgorithm" />
+                      :on-run-algorithm="handleRunAlgorithm"
+                      v-model:filterEnabled="filterEnabled"
+                      v-model:heatmapEnabled="heatmapEnabled"
+                      v-model:overlayEnabled="overlayEnabled"
+                      v-model:weightEnabled="weightEnabled"
+                      v-model:showWeightValue="showWeightValue"
+                      :globalAnalysisEnabled="globalAnalysisEnabled" />
       </div>
     </header>
 
@@ -86,7 +98,13 @@
                     @save-result="handleSaveResult"
                     @loading-change="isLoading = $event"
                     @category-change="selectedCategoryPath = $event"
-                    :on-run-algorithm="handleRunAlgorithm" />
+                    :on-run-algorithm="handleRunAlgorithm"
+                    v-model:filterEnabled="filterEnabled"
+                    v-model:heatmapEnabled="heatmapEnabled"
+                    v-model:overlayEnabled="overlayEnabled"
+                    v-model:weightEnabled="weightEnabled"
+                    v-model:showWeightValue="showWeightValue"
+                    :globalAnalysisEnabled="globalAnalysisEnabled" />
     </header>
     <main 
       class="bottom-split" 
@@ -104,15 +122,21 @@
             <MapContainer ref="mapComponent" 
                           :poi-features="allPoiFeatures" 
                           :hovered-feature-id="hoveredFeatureId"
+                          :filter-enabled="filterEnabled"
+                          :heatmap-enabled="heatmapEnabled"
+                          :overlay-enabled="overlayEnabled"
+                          :weight-enabled="weightEnabled"
+                          :show-weight-value="showWeightValue"
+                          :global-analysis-enabled="globalAnalysisEnabled"
                           @polygon-completed="handlePolygonCompleted" 
                           @map-ready="handleMapReady"
                           @hover-feature="handleFeatureHover"
                           @click-feature="handleFeatureClick"
                           @map-move-end="handleMapMoveEnd"
-                          @toggle-filter="handleToggleFilter"
-                          @toggle-overlay="handleToggleOverlay"
+                          @toggle-filter="filterEnabled = $event"
+                          @toggle-overlay="overlayEnabled = $event"
                           @weight-change="handleWeightChange"
-                          @global-analysis-change="handleGlobalAnalysisChange" />
+                          @global-analysis-change="globalAnalysisEnabled = $event" />
           </div>
         </div>
         
@@ -285,6 +309,7 @@ if (aiExpanded.value) {
 // 叠加模式状态
 const activeGroups = ref([]); // [{ name: 'A', features: [] }, ...]
 const overlayEnabled = ref(false);
+const heatmapEnabled = ref(false); // 新增热力图同步状态
 
 // 权重渲染状态
 const weightEnabled = ref(false); // 是否启用权重渲染
@@ -1343,7 +1368,7 @@ html, body, #app {
   cursor: pointer;
   z-index: 1000;
   box-shadow: 0 4px 20px rgba(99, 102, 241, 0.5);
-  transition: all 0.3s ease;
+  transition: all 0.4s ease;
   animation: fabPulse 2s infinite;
 }
 
@@ -1481,7 +1506,7 @@ html, body, #app {
   .ai-fab {
     bottom: 24px;
     left: 50%;
-    transform: translateX(-50%) scale(0.6);
+    transform: translateX(-50%) scale(0.9);
     transform-origin: center;
     padding: 12px 28px;
     border-radius: 40px;

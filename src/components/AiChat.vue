@@ -34,11 +34,6 @@
     <div class="chat-messages" ref="messagesContainer">
       <!-- 欢迎消息 -->
       <div v-if="messages.length === 0" class="welcome-message">
-        <div class="welcome-icon">
-          <svg viewBox="0 0 24 24" width="48" height="48" fill="currentColor">
-            <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/>
-          </svg>
-        </div>
         <h3>欢迎使用 标签云 智能分析助手 </h3>
         <p>我拥有地理感知的能力，可以帮您分析选中区域内的POI数据，提供地理分析和洞察参考。</p>
         <div class="quick-actions">
@@ -693,7 +688,7 @@ defineExpose({
 
 .ai-name {
   font-weight: 700;
-  font-size: 15px;
+  font-size: 16px;
   color: #f8fafc;
   letter-spacing: 0.5px;
 }

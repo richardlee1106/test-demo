@@ -78,7 +78,7 @@
         v-model="selectedCategoryPath"
         :options="categoryOptions"
         :props="{ checkStrictly: true }"
-        placeholder="请先按照语义选择类别"
+        placeholder="地名大类"
         @change="handleCascaderChange"
         class="group-select mobile-select glass-cascader"
         :teleported="false"
@@ -165,6 +165,111 @@
             </svg>
           </div>
           <span>初始化</span>
+        </div>
+
+        <!-- 移动端滑块控制区 -->
+        <div class="menu-divider"></div>
+        <div class="menu-section-title">显示控制</div>
+        
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>
+              </svg>
+            </div>
+            <span>实时过滤</span>
+          </div>
+          <el-switch 
+            :model-value="filterEnabled" 
+            @update:modelValue="emit('update:filterEnabled', $event)"
+            size="small"
+          />
+        </div>
+
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v20M2 12h20M5 5l14 14M19 5L5 19"/>
+              </svg>
+            </div>
+            <span>热力图层</span>
+          </div>
+          <el-switch 
+            :model-value="heatmapEnabled" 
+            @update:modelValue="emit('update:heatmapEnabled', $event)"
+            size="small"
+          />
+        </div>
+
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="8" rx="2" />
+                <rect x="2" y="14" width="20" height="8" rx="2" />
+              </svg>
+            </div>
+            <span>筛选叠加</span>
+          </div>
+          <el-switch 
+            :model-value="overlayEnabled" 
+            @update:modelValue="emit('update:overlayEnabled', $event)"
+            size="small"
+          />
+        </div>
+
+        <div class="menu-divider"></div>
+        <div class="menu-section-title">权重分析</div>
+
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7"/>
+              </svg>
+            </div>
+            <span>标签权重</span>
+          </div>
+          <el-switch 
+            :model-value="weightEnabled" 
+            @update:modelValue="emit('update:weightEnabled', $event)"
+            size="small"
+          />
+        </div>
+
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              </svg>
+            </div>
+            <span>显示权重</span>
+          </div>
+          <el-switch 
+            :model-value="showWeightValue" 
+            :disabled="!weightEnabled"
+            @update:modelValue="emit('update:showWeightValue', $event)"
+            size="small"
+          />
+        </div>
+
+        <div class="menu-switch-item">
+          <div class="menu-switch-label">
+            <div class="menu-item-icon">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10zM2 12h20"/>
+              </svg>
+            </div>
+            <span>全域感知</span>
+          </div>
+          <el-switch 
+            :model-value="true" 
+            disabled
+            size="small"
+          />
         </div>
         </div>
       </div>
@@ -280,7 +385,7 @@ import { ElMessage } from 'element-plus';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 import { API_BASE_URL } from '../config';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'category-change']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'category-change', 'update:filterEnabled', 'update:heatmapEnabled', 'update:overlayEnabled', 'update:weightEnabled', 'update:showWeightValue', 'update:globalAnalysisEnabled']);
 // const selectedGroup = ref(''); // Replace with array path
 const selectedCategoryPath = ref([]);
 const drawEnabled = ref(false);
@@ -298,7 +403,14 @@ const props = defineProps({
   searchOffset: { type: Number, default: 0 },
   panelType: { type: String, default: 'map' }, // 'map' (地图) 或 'tag' (标签)
   currentAlgorithm: { type: String, default: 'basic' },
-  currentPoiFeatures: { type: Array, default: () => [] } // 当前显示的 POI 数据
+  currentPoiFeatures: { type: Array, default: () => [] }, // 当前显示的 POI 数据
+  // 同步开关状态
+  filterEnabled: Boolean,
+  heatmapEnabled: Boolean,
+  overlayEnabled: Boolean,
+  weightEnabled: Boolean,
+  showWeightValue: Boolean,
+  globalAnalysisEnabled: Boolean
 });
 
 // 获取当前选中的类别名称（用于在Header显示）
@@ -1119,19 +1231,55 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 
 /* 移动端菜单内容 - 自适应高度 */
 .mobile-menu-content {
-  width: 160px;
-  background: linear-gradient(180deg, #ffffff 0%, #f8f9fa 100%);
-  height: auto; /* 自适应内容高度 */
-  max-height: calc(100vh - 100px); /* 最大高度，留边距 */
-  padding: 16px 0;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.15); /* 恢复左侧阴影 */
+  width: 180px; /* 稍微调宽一点以容纳文字和开关 */
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.98) 100%);
+  backdrop-filter: blur(10px);
+  height: auto;
+  max-height: calc(100vh - 120px);
+  padding: 12px 0;
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.2), 0 10px 30px rgba(0, 0, 0, 0.1);
   display: flex;
   flex-direction: column;
-  animation: slideInRight 0.25s ease-out; /* 恢复向左滑动进入 */
-  border-radius: 12px; /* 四边圆角 */
-  margin-right: 8px; /* 恢复右侧边距 */
-  margin-top: 8px; /* 顶部边距 */
-  overflow-y: auto; /* 内容过多时可滚动 */
+  animation: slideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 16px;
+  margin-right: 12px;
+  margin-top: 12px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.menu-section-title {
+  padding: 12px 20px 4px 20px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+}
+
+.menu-switch-item {
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 15px;
+  color: #1e293b;
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.menu-switch-item:hover {
+  background: rgba(99, 102, 241, 0.05);
+}
+
+.menu-switch-item span {
+  font-weight: 500;
+}
+
+.menu-switch-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 @keyframes slideInLeft {
@@ -1157,23 +1305,32 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 }
 
 .menu-item {
-  padding: 14px 20px;
+  padding: 12px 20px;
   display: flex;
   align-items: center;
   gap: 12px;
   cursor: pointer;
   font-size: 15px;
-  color: #333;
-  transition: background 0.15s, padding-left 0.15s;
+  color: #1e293b;
+  transition: all 0.2s ease;
 }
 
 .menu-item:hover {
-  background: linear-gradient(90deg, #f0f4ff 0%, #ffffff 100%);
+  background: rgba(99, 102, 241, 0.05);
   padding-left: 24px;
 }
 
 .menu-item:active {
   background: #e8ecf0;
+}
+
+.menu-item-icon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6366f1;
 }
 
 .menu-icon {

@@ -160,6 +160,13 @@ const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'cl
 const props = defineProps({
   poiFeatures: { type: Array, default: () => [] },
   hoveredFeatureId: { type: Object, default: null }, // 我们直接使用 feature 对象作为 ID
+  // 外部控制的状态
+  filterEnabled: { type: Boolean, default: false },
+  heatmapEnabled: { type: Boolean, default: false },
+  overlayEnabled: { type: Boolean, default: false },
+  weightEnabled: { type: Boolean, default: false },
+  showWeightValue: { type: Boolean, default: false },
+  globalAnalysisEnabled: { type: Boolean, default: true },
 });
 
 // 地图容器 DOM 引用
@@ -171,18 +178,22 @@ let drawInteraction = null;
 // 内部跟踪当前地图上悬停的 feature
 let hoveredFeature = null; 
 // 实时过滤开关状态
-const filterEnabled = ref(false);
+const filterEnabled = ref(props.filterEnabled);
 // 热力图开关状态
-const heatmapEnabled = ref(false);
+const heatmapEnabled = ref(props.heatmapEnabled);
 // 叠加模式开关状态
-const overlayEnabled = ref(false);
+const overlayEnabled = ref(props.overlayEnabled);
 
 // ============ 权重控制相关状态 ============
-const weightEnabled = ref(false); // 标签权重开关
-const showWeightValue = ref(false); // 显示权重值开关
-const weightDialogVisible = ref(false); // 权重选择弹窗
-const selectedWeightType = ref('population'); // 选中的权重类型
-const weightLoading = ref(false); // 权重加载中
+const weightEnabled = ref(props.weightEnabled); // 标签权重开关
+const showWeightValue = ref(props.showWeightValue); // 显示权重值开关
+
+// 监听 props 变化同步内部状态
+watch(() => props.filterEnabled, (val) => { filterEnabled.value = val; });
+watch(() => props.heatmapEnabled, (val) => { heatmapEnabled.value = val; });
+watch(() => props.overlayEnabled, (val) => { overlayEnabled.value = val; });
+watch(() => props.weightEnabled, (val) => { weightEnabled.value = val; });
+watch(() => props.showWeightValue, (val) => { showWeightValue.value = val; });
 
 // ============ POI 名称气泡 ============
 const poiPopup = ref(null); // 气泡 DOM 引用
@@ -263,6 +274,13 @@ async function confirmWeightDialog() {
   setTimeout(() => {
     weightLoading.value = false;
     weightDialogVisible.value = false;
+    // 强制同步父组件状态 (可选)
+    emit('weight-change', { 
+      enabled: true, 
+      showValue: showWeightValue.value,
+      weightType: selectedWeightType.value,
+      needLoad: true 
+    });
   }, 500);
 }
 
@@ -1385,22 +1403,7 @@ function transformLon(x, y) {
 
 @media (max-width: 768px) {
   .map-filter-control {
-    top: 80px;
-    left: 12px;
-    right: auto;
-    min-width: auto;
-    padding: 10px;
-    gap: 8px;
-    transform: scale(0.8);
-    transform-origin: top left;
-  }
-  
-  .filter-label {
-    font-size: 12px;
-  }
-
-  .control-row {
-    gap: 8px;
+    display: none !important;
   }
 }
 
