@@ -68,11 +68,14 @@ const start = async () => {
     await initVectorDB()
     
     // 启动 HTTP 服务
-    const port = process.env.PORT || 3000
-    await fastify.listen({ port, host: '0.0.0.0' })
-    console.log(`🚀 GeoLoom-RAG Backend 运行在 http://localhost:${port}`)
-    console.log(`📍 空间查询 API: http://localhost:${port}/api/spatial/query`)
-    console.log(`🔍 快速搜索 API: http://localhost:${port}/api/search/quick`)
+    const port = parseInt(process.env.PORT) || 3000
+    const host = '0.0.0.0'
+    await fastify.listen({ port, host })
+    
+    console.log(`\n🚀 GeoLoom-RAG Backend 运行在 http://${host}:${port}`)
+    console.log(`🤖 LLM API 端点: ${process.env.LLM_BASE_URL || '未配置'}`)
+    console.log(`📍 空间查询 API: http://${host}:${port}/api/spatial/query`)
+    console.log(`🔍 快速搜索 API: http://${host}:${port}/api/search/quick\n`)
   } catch (err) {
     fastify.log.error(err)
     process.exit(1)

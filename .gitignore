@@ -47,3 +47,5 @@ volumes/
 .agent/
 
 fastify-backend/*.tar
+backend-api.tar
+spatial-db.tar

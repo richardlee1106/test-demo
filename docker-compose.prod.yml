@@ -38,11 +38,17 @@ services:
       context: ./fastify-backend
     container_name: geoloom-backend
     restart: unless-stopped
+    # 核心：直接把宿主机代码文件夹挂载进去，这样你在 1Panel 改的代码会立即生效
+    volumes:
+      - ./fastify-backend:/app
+      # 排除 node_modules，防止宿主机和容器环境冲突
+      - /app/node_modules
     # 核心：直接告诉 Docker 读 .env 文件，不要在下面写 ${...}，防止被服务器空的 shell 变量覆盖
     env_file: .env
     environment:
       - POSTGRES_HOST=spatial-db
       - POSTGRES_PORT=5432
+      - PORT=3000
     ports:
       - "3002:3000"
     depends_on:
