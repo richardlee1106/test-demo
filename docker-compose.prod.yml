@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: ./docker/Dockerfile.db
     container_name: geoloom-spatial-db
-    shm_size: '512mb'  # <--- 关键！增加这一行，给够共享内存
+    shm_size: '512mb'
     restart: unless-stopped
     env_file: .env
     environment:
@@ -14,8 +14,8 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
       - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm,vector
-      # 强制改变共享内存分配类型
-      - POSTGRES_EXTRA_PARAMS=-c dynamic_shared_memory_type=sysv
+      # 强制使用 sysv 模式申请内存，绕过 /dev/shm 缩放限制，解决 "No space left on device"
+      - PGOPTIONS=-c dynamic_shared_memory_type=sysv
     ports:
       - "5432:5432"
     volumes:
@@ -35,17 +35,12 @@ services:
       context: ./fastify-backend
     container_name: geoloom-backend
     restart: unless-stopped
+    # 核心：直接告诉 Docker 读 .env 文件，不要在下面写 ${...}，防止被服务器空的 shell 变量覆盖
     env_file: .env
     environment:
       - POSTGRES_HOST=spatial-db
       - POSTGRES_PORT=5432
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DATABASE=${POSTGRES_DATABASE:-geoloom}
-      - LLM_BASE_URL=${LLM_BASE_URL}
-      - LLM_MODEL=${LOCAL_LLM_MODEL:-qwen3vl-8b-instruct}
-      - GLM_API_KEY=${GLM_API_KEY}
-      - PORT=3000
+      # 这里的变量会自动从 .env 读取，不需要重复映射
     ports:
       - "3002:3000"
     depends_on:
