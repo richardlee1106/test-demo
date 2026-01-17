@@ -14,12 +14,15 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
       - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm,vector
-      # 强制使用 sysv 模式申请内存，绕过 /dev/shm 缩放限制，解决 "No space left on device"
+      # 明确指定数据存放路径，配合 volumes 确保数据持久化不丢失
+      - PGDATA=/var/lib/postgresql/data/pgdata
+      # 强制使用 sysv 模式申请内存，解决 "No space left on device"
       - PGOPTIONS=-c dynamic_shared_memory_type=sysv
     ports:
       - "5432:5432"
     volumes:
-      - spatial_db_data:/var/lib/postgresql/data
+      # 直接映射宿主机物理目录，不再使用 Docker 自动管理的内部卷，防止路径混乱
+      - /mnt/data/geoloom_db_data:/var/lib/postgresql/data
       - ./docker-init-spatial:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -40,7 +43,6 @@ services:
     environment:
       - POSTGRES_HOST=spatial-db
       - POSTGRES_PORT=5432
-      # 这里的变量会自动从 .env 读取，不需要重复映射
     ports:
       - "3002:3000"
     depends_on:
@@ -52,6 +54,7 @@ services:
       - "host.docker.internal:host-gateway"
 
 volumes:
+  # 注意：由于上面改成了物理路径映射，这个声明其实已经不生效了，但保留定义防止报错
   spatial_db_data:
     driver: local
 
