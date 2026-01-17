@@ -49,6 +49,7 @@
                       @search="handleSearch"
                       @clear-search="handleClearSearch"
                       @save-result="handleSaveResult"
+                      @category-change="selectedCategoryPath = $event"
                       @loading-change="isLoading = $event" />
       </div>
 
@@ -68,6 +69,7 @@
                       @search="handleSearch"
                       @clear-search="handleClearSearch"
                       @loading-change="isLoading = $event"
+                      @category-change="selectedCategoryPath = $event"
                       :on-run-algorithm="handleRunAlgorithm" />
       </div>
     </header>
@@ -83,6 +85,7 @@
                     @clear-search="handleClearSearch"
                     @save-result="handleSaveResult"
                     @loading-change="isLoading = $event"
+                    @category-change="selectedCategoryPath = $event"
                     :on-run-algorithm="handleRunAlgorithm" />
     </header>
     <main 
@@ -154,13 +157,14 @@
       <!-- 右侧面板：AI 对话 - 动态宽度 -->
       <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: aiPanelPercent + '%' }">
         <div class="panel-content">
-          <AiChat ref="aiChatRef" 
+      <AiChat ref="aiChatRef" 
                   :poi-features="selectedFeatures" 
                   :boundary-polygon="selectedPolygon"
                   :draw-mode="selectedDrawMode"
                   :circle-center="circleCenterGeo"
                   :map-bounds="mapBounds"
                   :global-analysis-enabled="globalAnalysisEnabled"
+                  :selected-categories="selectedCategoryPath"
                   @close="toggleAiPanel"
                   @render-to-tagcloud="handleRenderAIResult" />
         </div>
@@ -174,7 +178,7 @@
           <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
         </svg>
       </div>
-      <span class="ai-fab-text">标签云AI助手</span>
+      <span class="ai-fab-text">GeoAI助手</span>
       <div class="ai-fab-badge" v-if="selectedFeatures.length > 0">{{ selectedFeatures.length }}</div>
     </div>
   </div>
@@ -208,6 +212,7 @@ const allPoiFeatures = shallowRef([]); // 所有加载的 POI 数据（优化：
 const selectedFeatures = shallowRef([]); // 当前选中的 POI 集合（优化：使用 shallowRef）
 const polygonCenter = ref(null); // 选中多边形的中心点（屏幕像素坐标）
 const selectedPolygon = ref(null); // 选中多边形的经纬度坐标数组
+const selectedCategoryPath = ref([]); // 当前选中的 POI 分类路径
 
 // 交互状态
 const hoveredFeatureId = ref(null); // 当前悬停的要素（用于联动高亮）
@@ -1476,7 +1481,8 @@ html, body, #app {
   .ai-fab {
     bottom: 24px;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) scale(0.6);
+    transform-origin: center;
     padding: 12px 28px;
     border-radius: 40px;
     width: auto;
@@ -1562,6 +1568,13 @@ body .el-overlay .el-dialog.mirspatial-dialog .el-button--primary {
   
   body .el-overlay .el-dialog.mirspatial-dialog .el-dialog__body {
     padding: 16px !important;
+  }
+}
+
+@media (min-width: 769px) {
+  body .el-overlay .el-dialog.mirspatial-dialog {
+    width: 550px !important;
+    margin-top: 15vh !important;
   }
 }
 </style>

@@ -800,6 +800,11 @@ function flyTo(feature) {
   if (rawToOlMap.has(feature)) {
     center = rawToOlMap.get(feature).getGeometry().getCoordinates();
   } else {
+     let [lon, lat] = feature.geometry.coordinates;
+     const poiCoordSys = import.meta.env.VITE_POI_COORD_SYS || 'gcj02';
+     if (poiCoordSys.toLowerCase() === 'wgs84') {
+       [lon, lat] = wgs84ToGcj02(lon, lat);
+     }
      center = fromLonLat([lon, lat]);
   }
   
@@ -1146,7 +1151,15 @@ function addUploadedPolygon(coordinates) {
   clearPolygon();
   
   // 将 GeoJSON 坐标转换为 OpenLayers 多边形
-  const olCoords = coordinates.map(coord => fromLonLat(coord));
+  const poiCoordSys = import.meta.env.VITE_POI_COORD_SYS || 'gcj02';
+  const olCoords = coordinates.map(coord => {
+    let [lon, lat] = coord;
+    // 如果系统配置为 wgs84，则说明输入数据（如上传的 GeoJSON）是 wgs84，需要转为 gcj02 以匹配底图
+    if (poiCoordSys.toLowerCase() === 'wgs84') {
+      [lon, lat] = wgs84ToGcj02(lon, lat);
+    }
+    return fromLonLat([lon, lat]);
+  });
   const geometry = new Polygon([olCoords]);
   
   // 创建多边形要素
@@ -1378,6 +1391,8 @@ function transformLon(x, y) {
     min-width: auto;
     padding: 10px;
     gap: 8px;
+    transform: scale(0.8);
+    transform-origin: top left;
   }
   
   .filter-label {

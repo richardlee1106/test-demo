@@ -1,13 +1,26 @@
 // Web Worker 用于从后端 API 加载 POI 数据
 self.onmessage = async (e) => {
-  const { categories, name, bounds, limit = 100000, baseUrl = '' } = e.data;
+  const { category, categories, name, bounds, limit = 500000, baseUrl = '' } = e.data;
 
   try {
+    // 灵活处理：如果是旧逻辑传了数组 categories，就用数组
+    // 如果是新逻辑传了单个 category，就把它放进数组传给后端 
+    // (因为后端的 findPOIsFiltered 目前设计是接受数组，但用模糊匹配)
+    // 或者直接修改后端 /spatial/fetch 接口来支持单参。
+    // 这里最简单的做法是：无论单数数，都传给后端，后端兼容性更好。
+    const finalCategories = categories || (category ? [category] : []);
+    
+    // 或者，我们利用后端 findPOIsWithinRadius 的逻辑（如果是半径搜），但这里是全都没中心点的fetch。
+    // 关键：后端 /fetch 路由是用 findPOIsFiltered(req.body)
+    // 而 services/database.js 的 findPOIsFiltered 是接受 { categories: [] } 的。
+    // 所以我们这里只要把 "中餐厅" 塞进一个数组 ["中餐厅"] 传过去，
+    // 后端就会生成 ILIKE '%中餐厅%' 的 SQL，这正是我们想要的！
+
     const response = await fetch(`${baseUrl}/api/spatial/fetch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        categories: categories || [],
+        categories: finalCategories, 
         bounds,
         limit
       })

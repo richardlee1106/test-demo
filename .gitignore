@@ -44,3 +44,5 @@ stop-*.bat
 
 # === Docker ===
 volumes/
+.agent/
+

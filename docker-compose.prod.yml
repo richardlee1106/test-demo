@@ -1,22 +1,67 @@
+version: '3.8'
+
 services:
-  backend:
-    build: ./fastify-backend
-    container_name: geoloom-backend
+  # 1. 空间数据库 (PostGIS + pgvector)
+  spatial-db:
+    image: kartoza/postgis:16-3.4
+    container_name: geoloom-spatial-db
     restart: unless-stopped
+    # 引用本地存储的 .env 文件（该文件已被 gitignore 忽略）
+    env_file:
+      - .env
     environment:
-      POSTGRES_HOST: geoloom-db
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: geoloom2026
-      POSTGRES_DATABASE: geoloom
-      GLM_API_KEY: c017eaf825e445579f9e5bc302d69922.0OtFSVgO3Qrb6dLx
-      LLM_BASE_URL: https://open.bigmodel.cn/api/paas/v4
+      # 优先级：.env > 这里的 default
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD} # 强制必须在 .env 中设置，无默认
+      POSTGRES_DB: ${POSTGRES_DATABASE:-geoloom}
+      POSTGRES_MULTIPLE_EXTENSIONS: postgis,hstore,pg_trgm
     ports:
-      - "3000:3000"
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - spatial_db_data:/var/lib/postgresql/data
+      - ./docker-init-spatial:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
       - geoloom-network
 
+  # 2. 后端 API 服务 (Fastify)
+  backend:
+    build: 
+      context: ./fastify-backend
+    container_name: geoloom-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # 在容器网络中，HOST 必须指向服务名
+      POSTGRES_HOST: spatial-db
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-geoloom}
+      # AI 服务配置：全部通过变量传入，不留硬编码
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_MODEL: ${LLM_MODEL}
+      GLM_API_KEY: ${GLM_API_KEY}
+      PORT: 3000
+    ports:
+      - "3002:3000"
+    depends_on:
+      spatial-db:
+        condition: service_healthy
+    networks:
+      - geoloom-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  spatial_db_data:
+    driver: local
+
 networks:
   geoloom-network:
-    external: true
-    name: geoloom-network
+    driver: bridge

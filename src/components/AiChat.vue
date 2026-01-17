@@ -10,7 +10,7 @@
             </svg>
           </div>
           <div class="header-info">
-            <span class="ai-name">标签云智能助手</span>
+            <span class="ai-name">GeoAI 助手</span>
             <span class="ai-status" :class="{ online: isOnline, offline: !isOnline }">
               {{ statusText }}
             </span>
@@ -170,6 +170,10 @@ const props = defineProps({
   mapBounds: {
     type: Array,
     default: null
+  },
+  selectedCategories: {
+    type: Array,
+    default: () => []
   }
 });
 
@@ -261,6 +265,7 @@ async function sendMessage() {
     // 收集对话上下文及空间约束
     const options = {
       globalAnalysis: props.globalAnalysisEnabled,
+      selectedCategories: props.selectedCategories,
       // 传递具体的边界原始数据，让后端 Executor 做硬过滤
       spatialContext: {
         boundary: props.boundaryPolygon,

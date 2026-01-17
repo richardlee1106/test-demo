@@ -69,7 +69,9 @@ function buildResultContext(executorResult) {
   
   // 1. 锚点信息
   if (results.anchor) {
-    sections.push(`🎯 **参考位置**: ${results.anchor.name} (${results.anchor.lon.toFixed(5)}, ${results.anchor.lat.toFixed(5)})`)
+    const lon = typeof results.anchor.lon === 'number' ? results.anchor.lon.toFixed(5) : 'Unknown';
+    const lat = typeof results.anchor.lat === 'number' ? results.anchor.lat.toFixed(5) : 'Unknown';
+    sections.push(`🎯 **参考位置**: ${results.anchor.name || '未知位置'} (${lon}, ${lat})`)
   }
   
   // 2. 区域画像

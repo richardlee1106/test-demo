@@ -280,7 +280,7 @@ import { ElMessage } from 'element-plus';
 import DataLoaderWorker from '../workers/dataLoader.worker.js?worker';
 import { API_BASE_URL } from '../config';
 
-const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded']);
+const emit = defineEmits(['data-loaded', 'run-algorithm', 'toggle-draw', 'debug-show', 'reset', 'search', 'clear-search', 'update:currentAlgorithm', 'save-result', 'loading-change', 'vector-polygon-uploaded', 'category-change']);
 // const selectedGroup = ref(''); // Replace with array path
 const selectedCategoryPath = ref([]);
 const drawEnabled = ref(false);
@@ -402,6 +402,7 @@ const handleCascaderChange = () => {
   const path = selectedCategoryPath.value;
   if (!path || path.length === 0) return;
 
+  emit('category-change', path);
   emit('loading-change', true);
 
   if (!dataWorker.value) {
@@ -438,15 +439,18 @@ const handleCascaderChange = () => {
     return;
   }
 
-  // 2. 获取该节点下所有叶子节点的名称（作为类别进行数据库查询）
-  const leafPaths = getAllLeafPaths(selectedNode, path);
-  const selectedCategories = leafPaths.map(p => p[p.length - 1]);
-  
+  // 简化逻辑：直接把最后一级选中的值（比如 "中餐厅"）传给 Worker
+  // Worker 会把它传给后端的 category 参数
+  // 后端的 database.js 已经写好了 ILIKE %...% 逻辑
+  // 这样 选中类"中餐厅" -> 后端匹配 (type LIKE %中餐厅% OR mid LIKE %中餐厅% OR small LIKE %中餐厅%)
+  // 完美覆盖所有子类
+  const categoryName = path[path.length - 1]; // 取最后一级选中项
+
   // 3. 发送给 Worker
   dataWorker.value.postMessage({
-    categories: selectedCategories,
+    category: categoryName, // 注意：以前是 categories: []，现在改为单数 category 配合后端
     name: path.join(' > '),
-    limit: 50000, // 不再限制在 2000，支持加载全量数据
+    limit: 500000, // 不再限制，支持加载全量数据 (50w)
     baseUrl: API_BASE_URL // 传递 API 基础路径
   });
 };
@@ -1416,5 +1420,13 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
 /* 隐藏讨厌的 Popper 箭头 (菱形) */
 :global(.category-drawer .el-popper__arrow) {
   display: none !important;
+}
+
+/* 响应式对话框宽度优化 */
+@media (min-width: 769px) {
+  :deep(.responsive-dialog) {
+    width: 550px !important;
+    max-width: 90% !important;
+  }
 }
 </style>

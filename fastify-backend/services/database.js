@@ -508,27 +508,34 @@ export async function getRepresentativeLandmarks(anchor, radiusM = 1000, topK = 
       SELECT ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography AS g
     ),
     landmark_types AS (
-      SELECT unnest(ARRAY['地铁', '学校', '大学', '医院', '商场', '广场', '公园', '银行', '政府']) AS ltype
+      SELECT unnest(ARRAY['大学', '医院', '地铁', '火车站', '机场', '学校', '商场', '广场', '公园', '博物馆', '银行', '办事大厅', '市政府', '区政府']) AS ltype
     ),
     candidates AS (
       SELECT 
         p.name,
         CASE 
+          WHEN p.category_mid ILIKE '%大学%' OR p.category_small ILIKE '%大学%' THEN '大学'
+          WHEN p.category_mid ILIKE '%医院%' OR (p.category_mid ILIKE '%医疗%' AND p.name ILIKE '%医院%') THEN '医院'
           WHEN p.category_mid ILIKE '%地铁%' THEN '地铁站'
-          WHEN p.category_mid ILIKE '%学校%' OR p.category_mid ILIKE '%大学%' THEN '学校'
-          WHEN p.category_mid ILIKE '%医院%' THEN '医院'
-          WHEN p.category_mid ILIKE '%商场%' OR p.category_mid ILIKE '%购物%' THEN '商场'
+          WHEN p.category_mid ILIKE '%火车站%' OR p.category_mid ILIKE '%高铁%' THEN '火车站'
+          WHEN p.category_mid ILIKE '%机场%' THEN '机场'
+          WHEN p.category_mid ILIKE '%学校%' OR p.category_small ILIKE '%学校%' THEN '学校'
+          WHEN p.category_mid ILIKE '%商场%' OR p.category_mid ILIKE '%购物%' THEN '大型商场'
           WHEN p.category_mid ILIKE '%广场%' THEN '广场'
           WHEN p.category_mid ILIKE '%公园%' THEN '公园'
-          WHEN p.category_mid ILIKE '%银行%' THEN '银行'
-          WHEN p.category_mid ILIKE '%政府%' OR p.category_mid ILIKE '%机关%' THEN '政府'
+          WHEN p.category_mid ILIKE '%博物馆%' OR p.category_mid ILIKE '%展览馆%' THEN '文化地标'
+          WHEN p.category_mid ILIKE '%银行%' AND (p.name ILIKE '%分行%' OR p.name ILIKE '%总部%') THEN '金融机构'
+          WHEN p.category_mid ILIKE '%政府%' OR p.category_mid ILIKE '%机关%' THEN '行政机构'
           ELSE p.category_mid
         END AS landmark_type,
         ST_Distance(p.geom::geography, a.g) AS distance_m,
         CASE 
+          WHEN p.category_mid ILIKE '%火车站%' OR p.category_mid ILIKE '%机场%' THEN 15
+          WHEN p.category_mid ILIKE '%大学%' OR (p.category_mid ILIKE '%医院%' AND p.name ILIKE '%医院%') THEN 12
           WHEN p.category_mid ILIKE '%地铁%' THEN 10
-          WHEN p.category_mid ILIKE '%学校%' OR p.category_mid ILIKE '%大学%' THEN 8
-          WHEN p.category_mid ILIKE '%医院%' THEN 7
+          WHEN p.category_mid ILIKE '%博物馆%' OR p.category_mid ILIKE '%市政府%' THEN 9
+          WHEN p.name ILIKE '%总店%' OR p.name ILIKE '%旗舰店%' THEN 8
+          WHEN p.category_mid ILIKE '%学校%' THEN 7
           WHEN p.category_mid ILIKE '%商场%' OR p.category_mid ILIKE '%购物%' THEN 6
           WHEN p.category_mid ILIKE '%广场%' THEN 5
           WHEN p.category_mid ILIKE '%公园%' THEN 4
@@ -536,14 +543,15 @@ export async function getRepresentativeLandmarks(anchor, radiusM = 1000, topK = 
         END AS type_weight
       FROM pois p, area a, landmark_types lt
       WHERE ST_DWithin(p.geom::geography, a.g, $3)
-        AND (p.category_mid ILIKE '%' || lt.ltype || '%' OR p.category_big ILIKE '%' || lt.ltype || '%')
+        AND (p.category_mid ILIKE '%' || lt.ltype || '%' OR p.category_big ILIKE '%' || lt.ltype || '%' OR p.name ILIKE '%' || lt.ltype || '%')
+        AND p.name NOT ILIKE '%小区%' AND p.name NOT ILIKE '%业主%' -- 过滤住宅区和业主委员会
     ),
     ranked AS (
       SELECT 
         name,
         landmark_type,
         distance_m,
-        type_weight * (1 - distance_m / $3) AS relevance_score,
+        type_weight * (1.5 - distance_m / $3) AS relevance_score, -- 增强权重影响，减弱距离衰减
         ROW_NUMBER() OVER (PARTITION BY landmark_type ORDER BY type_weight DESC, distance_m ASC) AS rn
       FROM candidates
     )

@@ -11,7 +11,7 @@
 import db from '../../services/database.js'
 import vectordb from '../../services/vectordb.js'
 import { resolveAnchor } from '../../services/geocoder.js'
-import Geohash from 'latlon-geohash'
+import h3 from 'h3-js'
 import { generateEmbedding } from '../../services/llm.js'
 
 /**
@@ -22,6 +22,7 @@ const EXECUTOR_CONFIG = {
   maxResults: 30,           // 最终返回给 Writer 的最大 POI 数
   maxLandmarks: 5,          // 最大代表性地标数
   defaultRadius: 1000,      // 默认搜索半径（米）
+  h3Resolution: 9           // H3 索引精度 (Res 9 边长约为 174m)
 }
 
 /**
@@ -118,7 +119,7 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     }
 
     if (hardBoundaryWKT) {
-      // 计算空间指纹 (GeoHash)
+      // 计算空间指纹 (H3)
       try {
         let centerLon, centerLat
         if (spatialContext.center) {
@@ -132,12 +133,19 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
           centerLat = spatialContext.boundary[0][1]
         }
 
-        if (centerLon !== undefined && centerLat !== undefined) {
-          const fingerprint = Geohash.encode(centerLat, centerLon, 7)
-          console.log(`[Executor] 空间指纹 (GeoHash): ${fingerprint}, 范围: ${spatialContext.mode || 'Viewport'}`)
+        // Strict numeric validation before H3 encoding
+        if (typeof centerLon === 'number' && typeof centerLat === 'number' &&
+            !isNaN(centerLon) && !isNaN(centerLat) &&
+            centerLat >= -90 && centerLat <= 90 &&
+            centerLon >= -180 && centerLon <= 180) {
+            
+          const fingerprint = h3.latLngToCell(centerLat, centerLon, EXECUTOR_CONFIG.h3Resolution)
+          console.log(`[Executor] 空间指纹 (H3): ${fingerprint}, 范围: ${spatialContext.mode || 'Viewport'}`)
+        } else {
+             console.warn(`[Executor] 无法计算 H3: 坐标无效 (Lat: ${centerLat}, Lon: ${centerLon})`);
         }
       } catch (e) {
-        console.warn('[Executor] GeoHash 计算失败:', e.message)
+        console.warn('[Executor] H3 计算失败:', e.message)
       }
     }
   }
@@ -200,13 +208,27 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
   }
 
   if (viewCenter) {
-    geoSignature = Geohash.encode(viewCenter.lat, viewCenter.lon, 6)
     try {
-      const neighbors = Geohash.neighbours(geoSignature)
-      const neighborList = Object.values(neighbors).slice(0, 3)
-      console.log(`[Executor] 空间签名: ${geoSignature}, 视野邻居: [${neighborList}...]`)
-    } catch (e) {
-      console.log(`[Executor] 空间签名: ${geoSignature}`)
+      // Validate coordinates before encoding
+      if (typeof viewCenter.lat === 'number' && typeof viewCenter.lon === 'number' &&
+          !isNaN(viewCenter.lat) && !isNaN(viewCenter.lon) &&
+          viewCenter.lat >= -90 && viewCenter.lat <= 90 &&
+          viewCenter.lon >= -180 && viewCenter.lon <= 180) {
+          
+        geoSignature = h3.latLngToCell(viewCenter.lat, viewCenter.lon, EXECUTOR_CONFIG.h3Resolution)
+        
+        try {
+          const neighbors = h3.gridDisk(geoSignature, 1)
+          // Exclude the center itself if desired, or keep it. H3 kRing includes the center.
+          console.log(`[Executor] 空间签名 (H3): ${geoSignature}, 邻居数: ${neighbors.length}`)
+        } catch (e) {
+          console.log(`[Executor] 空间签名 (H3): ${geoSignature}`)
+        }
+      } else {
+        console.warn(`[Executor] 无法生成空间签名: 坐标无效 (Lat: ${viewCenter.lat}, Lon: ${viewCenter.lon})`)
+      }
+    } catch (err) {
+      console.warn('[Executor] H3 签名生成失败:', err.message)
     }
   }
 
@@ -223,7 +245,8 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     is_category_mismatch: isCategoryMismatch,
     has_hard_boundary: !!hardBoundaryWKT,
     effective_anchor_type: anchorCoords ? 'landmark' : (viewCenter ? 'viewport' : 'none'),
-    geo_signature: geoSignature
+    geo_signature: geoSignature,
+    spatial_index_type: 'h3'
   }
 
   console.log(`[Executor] 决策流: Mismatch=${isCategoryMismatch}, HardBound=${!!hardBoundaryWKT}, EffectiveAnchor=${!!effectiveAnchor}`)
@@ -236,7 +259,9 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
       console.log(`[Executor] 执行 WKT 几何过滤检索...`)
       candidates = await searchFromDatabase(effectiveAnchor, radius, plan, hardBoundaryWKT)
     } else if (effectiveAnchor) {
-      console.log(`[Executor] 执行位置锚点检索: ${effectiveAnchor.lon.toFixed(4)}, ${effectiveAnchor.lat.toFixed(4)}, 半径: ${radius}m`)
+      const logLon = typeof effectiveAnchor.lon === 'number' ? effectiveAnchor.lon.toFixed(4) : effectiveAnchor.lon;
+      const logLat = typeof effectiveAnchor.lat === 'number' ? effectiveAnchor.lat.toFixed(4) : effectiveAnchor.lat;
+      console.log(`[Executor] 执行位置锚点检索: ${logLon}, ${logLat}, 半径: ${radius}m`)
       
       // 初始化调试信息收集
       result.stats.debug_info = []
@@ -619,30 +644,43 @@ function extractTags(props) {
  * 计算区域画像（从前端数据）
  */
 function computeAreaProfile(pois) {
+  // H3 空间聚合统计
+  const h3Stats = {}
   const categoryStats = {}
-  
+
   pois.forEach(poi => {
     const props = poi.properties || poi
-    const cat = props['大类'] || props.category_big || props.type || '未分类'
     
+    // 1. 类别统计
+    const cat = props['大类'] || props.category_big || props.type || '未分类'
     if (!categoryStats[cat]) {
       categoryStats[cat] = { count: 0, examples: [], ratings: [] }
     }
-    
     categoryStats[cat].count++
-    
     if (categoryStats[cat].examples.length < 2) {
       const name = props['名称'] || props.name
       if (name) categoryStats[cat].examples.push(name)
     }
-    
     const rating = props.rating
     if (rating) categoryStats[cat].ratings.push(rating)
+
+    // 2. H3 空间聚合
+    const lon = props.lon || (poi.geometry?.coordinates ? poi.geometry.coordinates[0] : null)
+    const lat = props.lat || (poi.geometry?.coordinates ? poi.geometry.coordinates[1] : null)
+    
+    if (typeof lat === 'number' && typeof lon === 'number' && !isNaN(lat) && !isNaN(lon)) {
+      try {
+        const h3Index = h3.latLngToCell(lat, lon, EXECUTOR_CONFIG.h3Resolution)
+        h3Stats[h3Index] = (h3Stats[h3Index] || 0) + 1
+      } catch (e) {
+        // Ignore H3 errors for individual points
+      }
+    }
   })
   
-  // 转换为排序后的数组
+  // 转换类别统计为排序后的数组
   const total = pois.length
-  const sorted = Object.entries(categoryStats)
+  const sortedCategories = Object.entries(categoryStats)
     .map(([category, data]) => ({
       category,
       count: data.count,
@@ -653,11 +691,21 @@ function computeAreaProfile(pois) {
       examples: data.examples
     }))
     .sort((a, b) => b.count - a.count)
+    
+  // 转换 H3 统计为数组 (用于热力图渲染)
+  const sortedH3Bins = Object.entries(h3Stats)
+    .map(([index, count]) => ({ index, count }))
+    .sort((a, b) => b.count - a.count)
   
   return {
     total_count: total,
-    dominant_categories: sorted.slice(0, 5),
-    rare_categories: sorted.filter(c => c.count <= 2).slice(0, 3)
+    dominant_categories: sortedCategories.slice(0, 5),
+    rare_categories: sortedCategories.filter(c => c.count <= 2).slice(0, 3),
+    spatial_distribution: {
+      resolution: EXECUTOR_CONFIG.h3Resolution,
+      total_bins: sortedH3Bins.length,
+      bins: sortedH3Bins
+    }
   }
 }
 

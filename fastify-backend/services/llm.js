@@ -29,7 +29,7 @@ let lastCheckTime = 0
 const CHECK_INTERVAL = 30000  // 30秒重新检测一次
 
 /**
- * 检测本地 LM Studio 是否可用
+ * 检测本地 LM Studio 是否可用，并自动获取当前加载的模型 ID
  * @returns {Promise<boolean>}
  */
 async function checkLocalAvailable() {
@@ -44,6 +44,7 @@ async function checkLocalAvailable() {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), LOCAL_CONFIG.timeout)
     
+    // 请求 /models 接口不仅能检测存活，还能拿模型 ID
     const response = await fetch(`${LOCAL_CONFIG.baseUrl}/models`, {
       method: 'GET',
       signal: controller.signal,
@@ -55,7 +56,15 @@ async function checkLocalAvailable() {
     lastCheckTime = now
     
     if (localAvailable) {
-      console.log('[LLM] ✅ 本地 LM Studio 可用')
+      const data = await response.json()
+      // 自动获取第一个可用模型的 ID (通常 LM Studio 只加载一个活跃模型)
+      if (data.data && data.data.length > 0) {
+        const fetchedModelIdx = data.data[0].id;
+        console.log(`[LLM] ✅ 本地 LM Studio 可用，自动识别模型: ${fetchedModelIdx}`)
+        LOCAL_CONFIG.model = fetchedModelIdx; 
+      } else {
+        console.log('[LLM] ✅ 本地 LM Studio 可用，但未返回模型列表，使用默认配置')
+      }
     }
     
     return localAvailable
@@ -221,6 +230,6 @@ export default {
   callLLM,
   generateEmbedding,
   refreshLocalStatus,
-  getLLMStatus,
+
   getActiveProviderInfo
 }
