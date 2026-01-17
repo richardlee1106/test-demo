@@ -175,11 +175,12 @@
         </div>
       </section>
       
-      <!-- AI 分隔线 (固定模式下改为普通边标) -->
-      <div v-if="aiExpanded" class="ai-border-line"></div>
-      
       <!-- 右侧面板：AI 对话 - 动态宽度 -->
-      <section v-show="aiExpanded" class="right-panel ai-panel" :style="{ width: aiPanelPercent + '%' }">
+      <section 
+        class="right-panel ai-panel" 
+        :class="{ 'panel-hidden': !aiExpanded }"
+        :style="{ width: aiExpanded ? aiPanelPercent + '%' : '0px' }"
+      >
         <div class="panel-content">
       <AiChat ref="aiChatRef" 
                   :poi-features="selectedFeatures" 
@@ -295,14 +296,20 @@ if (aiExpanded.value) {
   // 切换后需要多次触发 resize 确保布局正确
   nextTick(() => {
     handleResize();
-    // 延迟再次触发以确保标签云正确渲染
-    setTimeout(() => {
+    // 动画期间持续触发 resize 确保渲染平滑
+    const startTime = Date.now();
+    const duration = 600;
+    const interval = setInterval(() => {
       handleResize();
-      if (tagCloudRef.value && typeof tagCloudRef.value.resize === 'function') {
-        tagCloudRef.value.resize();
+      if (Date.now() - startTime > duration) {
+        clearInterval(interval);
+        // 最后确保一次
+        handleResize();
+        if (tagCloudRef.value && typeof tagCloudRef.value.resize === 'function') {
+          tagCloudRef.value.resize();
+        }
       }
-    }, 100);
-    setTimeout(() => handleResize(), 300);
+    }, 50); // 每 50ms 触发一次
   });
 }
 
@@ -1245,12 +1252,19 @@ html, body, #app {
   flex: none; /* 由 style 绑定的百分比控制宽度 */
 }
 
+.left-section {
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1), 
+              flex 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
 /* 地图面板 - 增强一体化 */
 .map-panel {
   overflow: hidden;
   background: transparent;
   display: flex;
   flex-direction: column;
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1), 
+              flex 0.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 标签云面板 - 增强一体化 */
@@ -1261,6 +1275,9 @@ html, body, #app {
   display: flex;
   flex-direction: column;
   border-left: 1px solid rgba(255, 255, 255, 0.05);
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1), 
+              flex 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* 右侧AI面板 */
@@ -1275,6 +1292,16 @@ html, body, #app {
 
 .ai-panel {
   border-left: 1px solid rgba(99, 102, 241, 0.3);
+  transition: width 0.6s cubic-bezier(0.16, 1, 0.3, 1), 
+              flex 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.panel-hidden {
+  width: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  border-left: none !important;
 }
 
 .panel-content {
