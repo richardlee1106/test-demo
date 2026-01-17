@@ -1,16 +1,19 @@
 services:
   # 1. 空间数据库 (PostGIS + pgvector)
   spatial-db:
-    image: kartoza/postgis:16-3.4
+    image: geoloom-spatial-db:latest
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile.db
     container_name: geoloom-spatial-db
+    shm_size: '512mb'  # <--- 关键！增加这一行，给够共享内存
     restart: unless-stopped
     env_file: .env
     environment:
-      # 直接映射环境变量，Compose 会自动从 .env 或 shell 环境中读取同名变量
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
-      - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm
+      - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm,vector
     ports:
       - "5432:5432"
     volumes:
