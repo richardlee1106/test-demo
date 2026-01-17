@@ -524,6 +524,7 @@ onMounted(() => {
   map.value = new OlMap({
     target: mapContainer.value,
     layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, locateLayer],
+    controls: [], // 移除默认控件（包括缩放按钮）
     view: new View({
       center: fromLonLat([114.307, 30.549]),
       zoom: 14,
