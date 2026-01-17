@@ -14,6 +14,8 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
       - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm,vector
+      # 强制改变共享内存分配类型
+      - POSTGRES_EXTRA_PARAMS=-c dynamic_shared_memory_type=sysv
     ports:
       - "5432:5432"
     volumes:
