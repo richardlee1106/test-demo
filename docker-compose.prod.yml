@@ -10,14 +10,12 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DATABASE:-geoloom}
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=geoloom2026  # 直接写死密码，避免读取不到变量
+      - POSTGRES_DB=geoloom
       - POSTGRES_MULTIPLE_EXTENSIONS=postgis,hstore,pg_trgm,vector
       # 明确指定数据存放路径，配合 volumes 确保数据持久化不丢失
       - PGDATA=/var/lib/postgresql/data/pgdata
-      # 强制使用 sysv 模式申请内存，解决 "No space left on device"
-      - PGOPTIONS=-c dynamic_shared_memory_type=sysv
     ports:
       - "5432:5432"
     volumes:

@@ -115,7 +115,7 @@
     >
       <!-- 三列横向布局 (AI展开时) | 两列布局 (默认) -->
       <section class="left-section" :class="{ 'three-column': aiExpanded }" 
-               :style="aiExpanded ? { width: (100 - aiPanelPercent) + '%' } : {}">
+               :style="aiExpanded ? { width: splitPercentage1 + '%' } : {}">
         <!-- 地图面板 -->
         <div class="map-panel" :style="mapPanelStyle">
           <div class="panel-content">
@@ -140,16 +140,23 @@
           </div>
         </div>
         
-        <!-- 分隔条 (已经统一风格) -->
-        <div class="splitter-inner" @mousedown="startDrag1">
+        <!-- 分隔条 (当 aiExpanded 时用于调节 Map/AI 比例，否则调节 Map/Tag 比例) -->
+        <!-- 分隔条 (当 aiExpanded 时自动隐藏，固定比例 3:2) -->
+        <div class="splitter-inner" v-if="!aiExpanded" @mousedown="startDrag1">
           <div class="splitter-line"></div>
         </div>
         
         <!-- 移动端 AI 面板遮罩层（点击收起） -->
         <div v-if="isAiExpanded" class="mobile-ai-mask mobile-only-block" @click="isAiExpanded = false"></div>
 
-        <!-- 标签云面板 (移动端隐藏) -->
-        <div class="tag-panel" :style="tagPanelStyle" :class="{ 'drawer-expanded': isTagDrawerExpanded, 'mobile-hidden': true }">
+        <!-- 标签云面板 (移动端隐藏，AI 展开时隐藏) -->
+        <div class="tag-panel" 
+             :style="tagPanelStyle" 
+             :class="{ 
+               'drawer-expanded': isTagDrawerExpanded, 
+               'mobile-hidden': true,
+               'panel-hidden': aiExpanded // AI 展开时隐藏标签云
+             }">
           <!-- 移动端抽屉提拉手柄 -->
           <div class="mobile-drawer-handle mobile-only-block" @click="isTagDrawerExpanded = !isTagDrawerExpanded">
             <div class="handle-bar"></div>
@@ -179,7 +186,7 @@
       <section 
         class="right-panel ai-panel" 
         :class="{ 'panel-hidden': !aiExpanded }"
-        :style="{ width: aiExpanded ? aiPanelPercent + '%' : '0px' }"
+        :style="{ width: aiExpanded ? (100 - splitPercentage1) + '%' : '0px' }"
       >
         <div class="panel-content">
       <AiChat ref="aiChatRef" 
@@ -253,15 +260,24 @@ const circleCenterGeo = ref(null); // 存储圆心经纬度（用于地理布局
 
 // AI 面板状态
 const aiExpanded = ref(false);  // AI 面板是否展开
-const aiPanelPercent = ref(30);  // AI 面板宽度百分比 (固定值)
-const splitPercentage1 = ref(50);  // 默认模式：地图占 50%
+const aiPanelPercent = ref(33.33);  // AI 面板宽度百分比 (默认 1/3)
+const splitPercentage1 = ref(50);  // 分割线位置 (从左侧起算的百分比)
 const isDragging1 = ref(false);
 const hSplitPercent = ref(50); // 已不再使用但保留以防依赖错误
 const isTagDrawerExpanded = ref(false); // 移动端标签云抽屉展开状态
 
 // 地图面板样式（AI展开时为三列横向布局的第一列）
 const mapPanelStyle = computed(() => {
-  // 在所有模式下都支持通过 splitPercentage1 动态调整宽度
+  // AI 展开模式下：Map 占满左侧区域 (TagCloud 隐藏)，宽度减去分隔条
+  if (aiExpanded.value) {
+    return { 
+      width: 'calc(100% - 5px)',
+      height: '100%',
+      flexShrink: 0
+    };
+  }
+
+  // 普通模式下：Map 宽度由 splitPercentage1 决定 (TagCloud 存在)
   return { 
     width: `calc(${splitPercentage1.value}% - 5px)`,
     height: '100%',
@@ -270,8 +286,10 @@ const mapPanelStyle = computed(() => {
 });
 
 // 标签云面板样式（AI展开时为三列横向布局的第二列）
+// 标签云面板样式 (AI展开时隐藏，该样式仅在未展开时有效)
 const tagPanelStyle = computed(() => {
-  // 在所有模式下都支持通过 splitPercentage1 动态调整宽度
+  if (aiExpanded.value) return { display: 'none' };
+  
   return { 
     width: `calc(${100 - splitPercentage1.value}% - 5px)`,
     height: '100%',
@@ -285,9 +303,8 @@ function toggleAiPanel() {
   
   // 设置默认比例
 if (aiExpanded.value) {
-  // 展开时：AI 30%，剩下 70% 中，Map 占 25%/70% ≈ 35.7%, Tag 占 45%/70% ≈ 64.3%
-  // 我们设置为用户之前要求的 1/3 和 2/3 比例 (即 23.3% 和 46.7% 总宽)
-  splitPercentage1.value = 33.33;
+  // 展开时：默认 Map 占 65%, AI 占 35% -> 65:35 比例
+  splitPercentage1.value = 65;
 } else {
   // 收起时：恢复 50/50 分布
   splitPercentage1.value = 50;
@@ -1628,5 +1645,9 @@ body .el-overlay .el-dialog.mirspatial-dialog .el-button--primary {
     width: 550px !important;
     margin-top: 15vh !important;
   }
+}
+
+.panel-hidden {
+  display: none !important;
 }
 </style>

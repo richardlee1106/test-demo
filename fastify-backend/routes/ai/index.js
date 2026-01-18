@@ -157,9 +157,14 @@ async function aiRoutes(fastify, options) {
       // 执行三阶段管道，传递 session 用于日志记录
       const pipelineOptions = { ...options, session }
       for await (const chunk of executePipeline(lastUserMessage, poiFeatures, pipelineOptions)) {
-        if (chunk) {
-          reply.raw.write(`data: ${JSON.stringify({ content: chunk })}\n\n`)
-          fullContent += chunk
+        if (!chunk) continue
+        
+        if (chunk.type === 'stage') {
+          reply.raw.write(`event: stage\n`)
+          reply.raw.write(`data: ${JSON.stringify({ name: chunk.name })}\n\n`)
+        } else if (chunk.type === 'text') {
+          reply.raw.write(`data: ${JSON.stringify({ content: chunk.content })}\n\n`)
+          fullContent += chunk.content
         }
       }
       

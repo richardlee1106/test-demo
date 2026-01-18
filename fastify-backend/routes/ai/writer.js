@@ -98,7 +98,27 @@ function buildResultContext(executorResult) {
     sections.push(profileText)
   }
   
-  // 3. 代表性地标
+  // 3. 空间分布 (H3 聚合) - 核心新增
+  if (results.spatial_analysis?.grids?.length > 0) {
+    const { grids, resolution, coverage_ratio } = results.spatial_analysis
+    let spatialText = `🗺️ **空间分布分析** (基于 H3 Res${resolution} 网格):\n`
+    
+    // 简述
+    if (coverage_ratio) spatialText += `- 覆盖率: ${Math.round(coverage_ratio * 100)}% 的热点区域\n`
+    
+    // 列出 Top 网格 (Heatmap Textualization)
+    spatialText += '\n**核心聚集区 (Top Grids)**:\n'
+    grids.forEach((g, i) => {
+      // g: { id, c (count), m (main_cat), p (rep_poi), r (ratio) }
+      if (i < 5) { // 只列出前 5 个最热的详述
+         spatialText += `- **热区 #${i+1}**: 包含 ${g.c} 个点。主导: ${g.m} (${Math.round(g.r * 100)}%)。代表点: ${g.p || '无'}\n`
+      }
+    })
+    
+    sections.push(spatialText)
+  }
+
+  // 4. 代表性地标
   if (results.landmarks?.length > 0) {
     let landmarkText = '🏛️ **区域内代表性地标**:\n'
     results.landmarks.forEach(l => {

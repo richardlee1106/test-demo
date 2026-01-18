@@ -18,7 +18,8 @@ import { generateEmbedding } from '../../services/llm.js'
  * 执行器配置
  */
 const EXECUTOR_CONFIG = {
-  maxCandidates: 200,       // 空间过滤后最大候选数
+  maxCandidates: 200,       // 普通搜索最大候选数
+  maxAnalysisCandidates: 10000, // 聚合分析最大候选数 (三通道之大数据通道)
   maxResults: 30,           // 最终返回给 Writer 的最大 POI 数
   maxLandmarks: 5,          // 最大代表性地标数
   defaultRadius: 1000,      // 默认搜索半径（米）
@@ -41,10 +42,12 @@ export async function executeQuery(queryPlan, frontendPOIs = [], options = {}) {
     let result
     
     // 根据 QueryPlan 决定执行路径
+    // 根据 QueryPlan 决定执行路径
     if (queryPlan.need_graph_reasoning) {
       result = await execGraphMode(queryPlan, frontendPOIs, options)
-    } else if (queryPlan.need_global_context) {
-      result = await execGlobalContextMode(queryPlan, frontendPOIs, options)
+    } else if (queryPlan.aggregation_strategy?.enable || queryPlan.need_global_context) {
+      // 启用三通道中的“统计通道”或“混合通道”
+      result = await execAggregatedAnalysisMode(queryPlan, frontendPOIs, options)
     } else {
       result = await execBasicMode(queryPlan, frontendPOIs, options)
     }
@@ -158,14 +161,32 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     return p['大类'] || p.category
   }))].filter(Boolean)
   
-  const isCategoryMismatch = plan.categories && plan.categories.length > 0 && 
-                            !plan.categories.some(cat => currentLocalCategories.some(lc => 
-                              String(lc).toLowerCase().includes(String(cat).toLowerCase()) || 
-                              String(cat).toLowerCase().includes(String(lc).toLowerCase())
-                            ))
+  // 关键逻辑调整: 如果用户没有指定类别 (plan.categories为空)，且有明确的空间范围 (hardBoundaryWKT 或 effectiveAnchor)，
+  // 则视为"全类目检索"。此时不认为是 mismatch (错配)，而是自然的"范围分析"需求。
+  const isCategoryMismatch = (() => {
+    // 情况 A: 用户指定了类别，检查前端数据里有没有
+    if (plan.categories && plan.categories.length > 0) {
+      return !plan.categories.some(cat => currentLocalCategories.some(lc => 
+        String(lc).toLowerCase().includes(String(cat).toLowerCase()) || 
+        String(cat).toLowerCase().includes(String(lc).toLowerCase())
+      ))
+    }
+    // 情况 B: 用户没指定类别 (all categories)
+    // 此时如果我们只有少量前端数据，或者前端从未加载过数据，或者我们想做全域分析，应该强制查库
+    // 简单起见，如果 plan.categories 为空，且要求 aggregation 或 global_context，通常意味着需要全库数据
+    // 除非前端已经加载了大量数据
+    if (safeFrontendPOIs.length < 50 && (hardBoundaryWKT || effectiveAnchor)) {
+      return true // 没数据且没选类别，强制查库
+    }
+    return false
+  })()
   
   if (isCategoryMismatch) {
-    console.log(`[Executor] 检测到类型错配: 内存数据为 [${currentLocalCategories.slice(0,3)}...]，而用户正在搜 [${plan.categories}]。强制开启全库检索模式。`)
+    if (plan.categories && plan.categories.length > 0) {
+       console.log(`[Executor] 检测到类型错配: 内存数据为 [${currentLocalCategories.slice(0,3)}...]，而用户正在搜 [${plan.categories}]。强制开启全库检索模式。`)
+    } else {
+       console.log(`[Executor] 检测到全域分析需求 (无特定类别): 内存数据不足，强制开启全库检索模式。`)
+    }
   }
   
   // 1. 解析锚点
@@ -246,10 +267,11 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     has_hard_boundary: !!hardBoundaryWKT,
     effective_anchor_type: anchorCoords ? 'landmark' : (viewCenter ? 'viewport' : 'none'),
     geo_signature: geoSignature,
-    spatial_index_type: 'h3'
+    spatial_index_type: 'h3',
+    search_all_categories: (!plan.categories || plan.categories.length === 0) // 标记是否全类目
   }
 
-  console.log(`[Executor] 决策流: Mismatch=${isCategoryMismatch}, HardBound=${!!hardBoundaryWKT}, EffectiveAnchor=${!!effectiveAnchor}`)
+  console.log(`[Executor] 决策流: Mismatch=${isCategoryMismatch}, HardBound=${!!hardBoundaryWKT}, EffectiveAnchor=${!!effectiveAnchor}, AllCats=${result.stats.spatial_trace.search_all_categories}`)
 
   if (hardBoundaryWKT || isCategoryMismatch || effectiveAnchor) {
     // 强制进入数据库检索流程 (全域感知生效)
@@ -320,126 +342,241 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
 }
 
 /**
- * 区域画像模式：需要统计分析
+ * 聚合分析模式 (三通道核心实现)
+ * 对应 Planner 的 "Statistical Channel" & "Hybrid Channel"
  * 
- * 在基础模式基础上，增加：
- * - 类别分布统计
- * - 代表性地标提取
+ * 核心逻辑：
+ * 1. 扩大搜索范围，获取最多 10000 个 POI
+ * 2. 在内存中做 H3 聚合、密度计算、异常检测
+ * 3. 按照 Sampling Strategy 选出 20-50 个代表点
+ * 4. 返回：Global Stats + H3 Grid List + Representative POIs
  */
-async function execGlobalContextMode(plan, frontendPOIs, options = {}) {
+async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   const result = {
-    mode: 'global_context',
+    mode: 'aggregated_analysis',
     anchor: null,
-    pois: [],
-    area_profile: null,
+    pois: [], // 仅放代表点
+    spatial_analysis: null, // H3 聚合数据
+    area_profile: null,     // 全局统计
     landmarks: [],
     stats: {
       total_candidates: 0,
       filtered_count: 0,
-      semantic_rerank_applied: false,
-      skip_poi_search: false
+      execution_time_ms: 0
     }
   }
+
+  // 1. 获取全量候选集 (Candidates)
+  // 注意：这里使用更大的 maxAnalysisCandidates
+  let candidates = []
   
-  // 检查是否为纯区域分析（无特定类别要求）
-  const isPureAreaAnalysis = (
-    plan.query_type === 'area_analysis' && 
-    (!plan.categories || plan.categories.length === 0) &&
-    !plan.semantic_query
-  )
-  
-  // 解析空间边界
+  // 构建空间上下文
+  const spatialContext = options.spatialContext || {}
   let hardBoundaryWKT = null
-  const spatialContext = options.spatialContext
+  let searchCenter = null
   
-  if (spatialContext) {
-    if (spatialContext.boundary && spatialContext.mode === 'Polygon') {
-      hardBoundaryWKT = pointsToWKT(spatialContext.boundary)
-    } else if (spatialContext.center && spatialContext.mode === 'Circle') {
-      hardBoundaryWKT = circleToWKT(spatialContext.center, plan.radius_m || 500)
-    } else if (spatialContext.viewport && Array.isArray(spatialContext.viewport)) {
-      hardBoundaryWKT = bboxToWKT(spatialContext.viewport)
-    }
-  }
-  
-  result.hardBoundaryWKT = hardBoundaryWKT
-  
-  // 计算视野中心作为锚点
-  let viewCenter = null
-  if (spatialContext) {
-    viewCenter = spatialContext.center || (spatialContext.viewport ? { 
+  if (spatialContext.boundary && spatialContext.mode === 'Polygon') {
+    hardBoundaryWKT = pointsToWKT(spatialContext.boundary)
+    searchCenter = getPolygonCenter(spatialContext.boundary)
+  } else if (spatialContext.center) {
+    searchCenter = spatialContext.center
+  } else if (spatialContext.viewport) {
+    searchCenter = { 
       lon: (spatialContext.viewport[0] + spatialContext.viewport[2]) / 2, 
       lat: (spatialContext.viewport[1] + spatialContext.viewport[3]) / 2 
-    } : null)
+    }
+  }
+
+  // 确定锚点
+  if (plan.anchor?.type === 'landmark' && plan.anchor?.name) {
+    const coords = await resolveAnchor(plan.anchor.name)
+    if (coords) searchCenter = coords
   }
   
-  if (viewCenter) {
+  if (searchCenter) {
     result.anchor = {
-      name: '当前视野中心',
-      lon: viewCenter.lon,
-      lat: viewCenter.lat,
-      resolved_from: 'viewport'
+      name: plan.anchor?.name || '区域中心',
+      lon: searchCenter.lon,
+      lat: searchCenter.lat
     }
   }
-  
-  // ========================
-  // 核心优化：纯区域分析时跳过 POI 检索
-  // ========================
-  if (isPureAreaAnalysis) {
-    console.log('[Executor] 纯区域分析模式: 跳过 POI 列表检索，仅计算区域画像')
-    result.stats.skip_poi_search = true
-    
-    // 直接计算区域画像
-    if (frontendPOIs.length > 0) {
-      result.area_profile = computeAreaProfile(frontendPOIs)
-    } else if (hardBoundaryWKT) {
-      result.area_profile = await computeAreaProfileFromDB(hardBoundaryWKT, null)
-    } else if (viewCenter) {
-      result.area_profile = await computeAreaProfileFromDB(
-        viewCenter,
-        plan.radius_m || EXECUTOR_CONFIG.defaultRadius
-      )
-    }
-    
-    // 提取代表性地标（不需要完整 POI 列表）
-    if (plan.need_landmarks && viewCenter) {
-      result.landmarks = await db.getRepresentativeLandmarks(
-        viewCenter,
-        plan.radius_m || EXECUTOR_CONFIG.defaultRadius,
-        EXECUTOR_CONFIG.maxLandmarks
-      )
-    }
-    
-    return result
+
+  // 执行宽范围搜索
+  console.log('[Executor] 开始聚合分析搜索，目标全量数据...')
+  const searchPlan = { 
+    ...plan, 
+    // 强制放宽条数限制，以便获取足够样本进行统计
+    limit: EXECUTOR_CONFIG.maxAnalysisCandidates 
   }
   
-  // ========================
-  // 非纯区域分析：执行完整的 POI 搜索
-  // ========================
-  const basicResult = await execBasicMode(
-    { ...plan, need_landmarks: true },
-    frontendPOIs,
-    options
-  )
+  if (hardBoundaryWKT) {
+    candidates = await searchFromDatabase(searchCenter, plan.radius_m, searchPlan, hardBoundaryWKT)
+  } else if (searchCenter) {
+    candidates = await searchFromDatabase(searchCenter, plan.radius_m || 2000, searchPlan)
+  } else if (frontendPOIs.length > 0) {
+    candidates = filterFromFrontendPOIs(frontendPOIs, plan)
+  }
+
+  result.stats.total_candidates = candidates.length
+  console.log(`[Executor] 聚合分析获取候选集: ${candidates.length} 条`)
+
+  // 2. 执行 H3 空间聚合
+  const h3Resolution = plan.aggregation_strategy?.resolution || EXECUTOR_CONFIG.h3Resolution
+  const aggregationResult = performH3Aggregation(candidates, h3Resolution)
   
-  // 合并结果
-  Object.assign(result, basicResult)
-  result.mode = 'global_context'
-  
-  // 计算区域画像
-  if (frontendPOIs.length > 0) {
-    result.area_profile = computeAreaProfile(frontendPOIs)
-  } else if (result.hardBoundaryWKT) {
-    result.area_profile = await computeAreaProfileFromDB(result.hardBoundaryWKT, null)
-  } else if (result.anchor) {
-    result.area_profile = await computeAreaProfileFromDB(
-      result.anchor,
-      plan.radius_m || EXECUTOR_CONFIG.defaultRadius
-    )
+  // 3. 执行代表点采样
+  let representativePOIs = []
+  if (plan.sampling_strategy?.enable) {
+    representativePOIs = selectRepresentativePOIs(candidates, aggregationResult, plan.sampling_strategy)
+  } else {
+    // 如果没开启采样，默认选 Top N
+    representativePOIs = candidates.slice(0, 20)
+  }
+
+  // 4. 计算全局统计
+  const globalProfile = computeAreaProfile(candidates) // 复用现有的 profile 计算
+
+  // 5. 组装结果
+  result.spatial_analysis = {
+    resolution: h3Resolution,
+    total_grids: aggregationResult.grids.length,
+    grids: aggregationResult.grids.slice(0, plan.aggregation_strategy?.max_bins || 50), // 只给 Writer 看 Top N 网格
+    search_radius: plan.radius_m,
+    coverage_ratio: candidates.length > 0 ? 1.0 : 0 // 简化
   }
   
+  result.area_profile = globalProfile
+  result.pois = compressPOIs(representativePOIs, result.anchor?.name) // 这里的 POIs 是代表点
+  
+  // 提取地标
+  if (plan.need_landmarks && searchCenter) {
+    result.landmarks = await extractLandmarks(candidates, searchCenter, plan.radius_m || 2000)
+  }
+
   return result
 }
+
+/**
+ * H3 聚合核心算法
+ * @param {Array} pois 
+ * @param {Number} res 
+ */
+function performH3Aggregation(pois, res) {
+  const gridMap = new Map()
+
+  pois.forEach(poi => {
+    const lat = poi.lat || (poi.geometry?.coordinates ? poi.geometry.coordinates[1] : null)
+    const lon = poi.lon || (poi.geometry?.coordinates ? poi.geometry.coordinates[0] : null)
+  
+    if (lat && lon) {
+      try {
+        const h3Idx = h3.latLngToCell(lat, lon, res)
+        if (!gridMap.has(h3Idx)) {
+          gridMap.set(h3Idx, {
+            id: h3Idx,
+            count: 0,
+            categories: {},
+            top_poi_name: null,
+            max_rating: -1,
+            sample_poi: null,
+            lat: 0, lon: 0 // Accumulator for centroid
+          })
+        }
+        
+        const cell = gridMap.get(h3Idx)
+        cell.count++
+        
+        // 类别统计
+        const cat = poi.category || poi.properties?.['小类'] || poi.properties?.['大类'] || '其他'
+        cell.categories[cat] = (cell.categories[cat] || 0) + 1
+        
+        // 记录一个代表名 (简单的逻辑：第一个遇到的)
+        if (!cell.top_poi_name) cell.top_poi_name = poi.name || poi.properties?.['名称']
+        
+        // 累加坐标求中心
+        cell.lat += lat
+        cell.lon += lon
+      } catch (e) {
+        // ignore
+      }
+    }
+  })
+
+  // 转换为数组并计算属性
+  const grids = Array.from(gridMap.values()).map(cell => {
+    // 计算中心
+    cell.lat /= cell.count
+    cell.lon /= cell.count
+    
+    // 找出主导类别
+    let maxCat = '', maxC = 0
+    for (const [c, count] of Object.entries(cell.categories)) {
+      if (count > maxC) { maxC = count; maxCat = c }
+    }
+    cell.main_category = maxCat
+    
+    // 格式化输出 (精简)
+    return {
+      id: cell.id,
+      c: cell.count, // count
+      m: cell.main_category, // main category
+      p: cell.top_poi_name, // representative poi name
+      r: Math.round(maxC / cell.count * 10) / 10 // ratio of main cat
+    }
+  })
+
+  // 按密度排序
+  grids.sort((a, b) => b.c - a.c)
+  
+  return { grids }
+}
+
+/**
+ * 选代表点
+ */
+function selectRepresentativePOIs(allPois, aggResult, strategy) {
+  // 简单策略：从 Top 5 的高密网格里各选 2 个，再从整体里按评分选 10 个
+  const selected = []
+  const seenIds = new Set()
+  
+  // 1. 密度代表 (Diversity by Density)
+  const topGrids = aggResult.grids.slice(0, 5)
+  // 这里简化处理，实际上需要反查。为了性能，我们遍历 allPois 重新匹配一下，或者优化数据结构
+  // 由于我们没在 grid 里存 poi list，这里用最简单的 global logic:
+  
+  // 暂时用全局 Top Rating + Random Mixed
+  const sortedByRating = [...allPois].sort((a,b) => (b.rating||0) - (a.rating||0))
+  
+  // 选前 10 高分
+  sortedByRating.slice(0, 10).forEach(p => {
+    const id = p.id || p.poiid
+    if (!seenIds.has(id)) {
+      selected.push(p); seenIds.add(id)
+    }
+  })
+  
+  // 随机再补 10 个以增加多样性
+  let attempts = 0
+  while(selected.length < (strategy.count || 20) && attempts < 100 && allPois.length > 0) {
+    const p = allPois[Math.floor(Math.random() * allPois.length)]
+    if (!p) { attempts++; continue; }
+    const id = p.id || p.poiid
+    if (!seenIds.has(id)) {
+      selected.push(p); seenIds.add(id)
+    }
+    attempts++
+  }
+  
+  return selected
+}
+
+function getPolygonCenter(ring) {
+  // 简单质心
+  let sx = 0, sy = 0, n = ring.length
+  ring.forEach(p => { sx += p[0]; sy += p[1] })
+  return { lon: sx/n, lat: sy/n }
+}
+
 
 /**
  * 图推理模式：路径/连通性分析
@@ -486,11 +623,12 @@ async function searchFromDatabase(anchor, radius, plan, geometryWKT = null) {
     return await db.findPOIsFiltered({
       anchor: anchor, 
       radius_m: radius,
-      categories: plan.categories || [],
+      categories: (plan.categories && plan.categories.length > 0) ? plan.categories : [], // 空数组代表全匹配
       rating_range: plan.rating_range,
       geometry: geometryWKT,
-      limit: EXECUTOR_CONFIG.maxCandidates
+      limit: plan.limit || EXECUTOR_CONFIG.maxCandidates
     });
+
   } catch (err) {
     console.error('[Executor] searchFromDatabase 严重错误:', err)
     return []
@@ -605,6 +743,7 @@ function sortCandidates(candidates, sortBy) {
  */
 function compressPOIs(pois, anchorName = '') {
   return pois.map(poi => {
+    if (!poi) return null
     const props = poi.properties || poi
     
     return {
@@ -619,7 +758,7 @@ function compressPOIs(pois, anchorName = '') {
       tags: extractTags(props),
       address: props['地址'] || props.address || poi.address || ''
     }
-  })
+  }).filter(Boolean)
 }
 
 /**

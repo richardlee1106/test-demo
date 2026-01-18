@@ -188,6 +188,14 @@ export async function sendChatMessageStream(messages, onChunk, options = {}, poi
              continue
           }
 
+          if (currentEvent === 'stage') {
+             const stageData = JSON.parse(data)
+             console.log('[AI Frontend] 收到阶段更新:', stageData.name)
+             if (onMeta) onMeta('stage', stageData.name)
+             currentEvent = null
+             continue
+          }
+
           // 默认为 message chunk
           const parsed = JSON.parse(data)
           

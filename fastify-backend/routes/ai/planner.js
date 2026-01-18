@@ -28,6 +28,21 @@ export const QUERY_PLAN_DEFAULTS = {
   semantic_query: '',
   max_results: 20,
   sort_by: 'distance',
+  
+  // 三通道核心配置
+  aggregation_strategy: {
+    enable: false,
+    method: 'h3',       // 'h3' | 'cluster' | 'administrative'
+    resolution: 9,      // H3 分辨率
+    max_bins: 50        // 传给 Writer 的最大网格/聚类数
+  },
+  sampling_strategy: {
+    enable: false,
+    method: 'representative', // 'representative' | 'random' | 'top_k'
+    count: 20,                // 采样数量 (代表点)
+    rules: ['diversity']      // 采样规则: 'diversity' (多样性), 'density' (高密区), 'outlier' (异常点)
+  },
+  
   need_global_context: false,
   need_landmarks: false,
   need_graph_reasoning: false,
@@ -38,82 +53,79 @@ export const QUERY_PLAN_DEFAULTS = {
  * Planner System Prompt
  * 严格约束 LLM 只做意图解析，不做回答
  */
-const PLANNER_SYSTEM_PROMPT = `你是一个"空间查询规划器"，职责是把用户的问题转换为结构化查询计划 JSON。
+const PLANNER_SYSTEM_PROMPT = `你是一个"空间查询规划器"，职责是将自然语言转换为结构化 QueryPlan。
 
-## 严格规则
-1. **只输出 JSON**，不要任何解释、Markdown 标记或额外文本
-2. 分析用户问题中的：
-   - 锚点信息（地名、地标、门，如"武汉理工大学南门"）
-   - 距离条件（半径/步行时间，统一转成米，步行5分钟约400米）
-   - 类别（如咖啡馆、蛋糕店、餐饮、教育等）
-   - 评分/价格等数值条件
-   - 语义偏好（如"环境安静"、"适合学习"、"人少"）
-   - 价格范围（如"便宜的"、"中等价格"、"昂贵的"）
-   - 是否需要区域画像（如"这附近以什么为主？"、"分析一下"）
-   - 是否涉及路径/连通性（如"从A到B怎么走"）
-   ## 默认值规则
-   - 半径未指定但说"最近的"或"离XXX最近"：2000 米（确保能找到结果）
-   - 半径未指定但说"附近"：1000 米
-   - 半径未指定但说"周边"：2000 米
-   - 如果用户没有指定距离条件，默认使用 1000 米
-   - 评分未指定：不限制，rating_range 为 [null, null]
-   - 结果数未指定：20
-   - 如果用户问"最近的一个"，max_results 应该为 5（多返回几个以防第一个不合适）
+## 核心职责：决策通道
+根据数据规模和问题类型，决定是看"全量明细"还是看"统计聚合"。
 
-## 优先级规则 (重要)
-1. 如果用户已在界面上选择了具体的类别 (context.selectedCategories)，你的分析 **必须核心关注** 这些类别。
-2. **"全域感知" (need_global_context)**：
-   - 只有在 context.selectedCategories 为空时，且用户问题具有全局性（如"分析一下这里"）时，才设为 true。
-   - 如果用户已选类别，除非用户显式说"分析全行业"或"不仅关注选中的"，否则 need_global_context 应为 false。
-3. 如果用户问的问题涉及到了他未选择的类别，优先以用户的提问词为准进行 categories 扩展。
+### 1. 明细通道 (Small Data / Search)
+- **场景**：找具体的店、问某个点详情、数据量小(<50个)。
+- **配置**：aggregation_strategy.enable=false
+- **结果**：Executor 返回具体的 POI 列表。
 
-## 语义类别映射（重要！）
-将用户口语化表达映射到实际类别：
-- "好玩的"、"玩的地方"、"娱乐" → categories: ["景点", "公园", "游乐园", "电影院", "KTV", "网吧", "桌游", "密室逃脱", "娱乐"]
-- "吃的"、"美食"、"吃饭" → categories: ["餐饮", "中餐", "快餐", "小吃", "火锅", "烧烤"]
-- "喝的"、"饮品" → categories: ["咖啡", "奶茶", "饮品", "茶馆", "酒吧"]
-- "买东西"、"购物" → categories: ["商场", "超市", "便利店", "购物"]
-- "休闲"、"放松" → categories: ["公园", "广场", "景点", "spa", "按摩", "休闲"]
-- "学习"、"看书" → categories: ["图书馆", "书店", "自习室", "咖啡馆"]
-- "运动"、"健身" → categories: ["体育馆", "健身房", "游泳馆", "球场", "运动"]
+### 2. 统计通道 (Big Data / Pattern)
+- **场景**：分析区域分布、热力图、业态结构、"这里有什么特点"、数据量大(>500个)。
+- **配置**：aggregation_strategy.enable=true (使用 H3 网格聚合)
+- **结果**：Executor 返回 H3 网格统计 + 只有少量代表点。
 
-## JSON 结构
+### 3. 混合通道 (Sampling)
+- **场景**：既要看整体分布，又想看几个典型例子。
+- **配置**：aggregation_strategy.enable=true, sampling_strategy.enable=true (选 representative)
+
+## JSON 结构定义
 {
-  "query_type": "poi_search" | "area_analysis" | "distance_query" | "recommendation" | "path_query" | "clarification_needed",
-  "anchor": {
-    "type": "landmark" | "coordinate" | "area" | "unknown",
-    "name": "地名或null",
-    "gate": "门名或null",
-    "direction": "方向如'对面'或null"
+  "query_type": "poi_search" | "area_analysis" | "recommendation",
+  "anchor": { ... },
+  "radius_m": number,
+  "categories": ["cat1", "cat2"],
+  "semantic_query": "...",
+  
+  // 聚合策略 (关键)
+  "aggregation_strategy": {
+    "enable": boolean,      // 是否启用空间聚合
+    "method": "h3",         // 固定为 h3
+    "resolution": number,   // 8(大范围) ~ 10(小范围), 默认 9
+    "max_bins": number      // 给 Writer 看多少个网格 (建议 20-50)
   },
-  "radius_m": 数字或null,
-  "categories": ["类别1", "类别2"],
-  "rating_range": [最低分或null, 最高分或null],
-  "semantic_query": "语义关键词",
-  "max_results": 数字,
-  "sort_by": "distance" | "rating" | "relevance" | null,
-  "need_global_context": true/false,
-  "need_landmarks": true/false,
-  "need_graph_reasoning": true/false,
-  "clarification_question": "需要澄清时的问题或null"
+  
+  // 采样策略 (关键)
+  "sampling_strategy": {
+    "enable": boolean,      // 是否需要代表点
+    "method": "representative", 
+    "count": number,        // 代表点数量 (建议 5-20)
+    "rules": ["diversity", "density"] // 优先展示多样性还是高密区?
+  },
+
+  "need_global_context": boolean, // 是否计算全局统计(Gini/分布图)
+  "need_landmarks": boolean
 }
 
-## 上下文信息
-{context}
+## 核心规则 (CRITICAL)
+1. **禁止臆造类别**：如果用户只说"分析这里","有什么特点"而未指定具体类别（如餐饮,学校）, \`categories\` 必须为 \`[]\` (空数组)，代表全域/全类目分析。
+   ❌ 错误：用户问"分析分布"，输出 'categories': ["restaurant", "cafe"]
+   ✅ 正确：用户问"分析分布"，输出 'categories': []
+2. **类别映射**：如果用户确实提到了类别，请映射为中文标准大类：
+   - "吃饭" -> ["餐饮"]
+   - "玩" -> ["风景名胜", "休闲娱乐"]
+   - "买东西" -> ["购物"]
+3. **距离默认值**：分析类请求默认 radius=3000 (3km)，找店类默认 radius=1000 (1km of search).
+
+## 决策逻辑 (Thinking logic)
+1. **用户问"分布"、"规律"、"概况"** → enable aggregation(res=9), enable sampling(count=10), need_global_context=true. 并且 categories 设为 [] (除非用户缩范围).
+2. **用户问"有没有..."、"找几个..."、"推荐..."** → disable aggregation, result count 10-20.
+3. **区域范围大 (>2km) 或 没指定具体类别 (全域)** → enable aggregation(res=8), enable sampling(count=20).
+4. **范围小 (<500m) 且 类别明确** → disable aggregation, return raw POIs.
 
 ## 示例
 
-用户问："青鱼嘴地铁站附近有蛋糕店吗？"
+用户问："分析一下这片区域的分布特征" (未指定类别 -> 全域)
 输出：
-{"query_type":"poi_search","anchor":{"type":"landmark","name":"青鱼嘴地铁站","gate":null,"direction":null},"radius_m":1000,"categories":["蛋糕店","甜品","烘焙"],"rating_range":[null,null],"semantic_query":"","max_results":10,"sort_by":"distance","need_global_context":false,"need_landmarks":true,"need_graph_reasoning":false,"clarification_question":null}
+{"query_type":"area_analysis","aggregation_strategy":{"enable":true,"method":"h3","resolution":9,"max_bins":30},"sampling_strategy":{"enable":true,"method":"representative","count":10},"categories":[],"need_global_context":true}
 
-用户问："分析一下当前区域的商业分布特征"
+用户问："帮我找最近的咖啡馆"
 输出：
-{"query_type":"area_analysis","anchor":{"type":"area","name":null,"gate":null,"direction":null},"radius_m":null,"categories":[],"rating_range":[null,null],"semantic_query":"商业分布","max_results":20,"sort_by":null,"need_global_context":true,"need_landmarks":true,"need_graph_reasoning":false,"clarification_question":null}
-
-用户问："武理工南门对面500m内评分4.5以上环境安静的咖啡馆"
-输出：
-{"query_type":"poi_search","anchor":{"type":"landmark","name":"武汉理工大学","gate":"南门","direction":"对面"},"radius_m":500,"categories":["咖啡馆","咖啡厅"],"rating_range":[4.5,null],"semantic_query":"环境安静","max_results":10,"sort_by":"rating","need_global_context":false,"need_landmarks":false,"need_graph_reasoning":false,"clarification_question":null}`
+{"query_type":"poi_search","aggregation_strategy":{"enable":false},"categories":["咖啡","咖啡厅"],"max_results":10}
+`
 
 /**
  * 构建上下文提示字符串
@@ -241,6 +253,26 @@ function validateAndNormalize(plan) {
   normalized.need_landmarks = !!plan.need_landmarks
   normalized.need_graph_reasoning = !!plan.need_graph_reasoning
   
+  // aggregation_strategy
+  if (plan.aggregation_strategy) {
+    normalized.aggregation_strategy = {
+      enable: !!plan.aggregation_strategy.enable,
+      method: 'h3',
+      resolution: plan.aggregation_strategy.resolution || 9,
+      max_bins: plan.aggregation_strategy.max_bins || 50
+    }
+  }
+
+  // sampling_strategy
+  if (plan.sampling_strategy) {
+    normalized.sampling_strategy = {
+      enable: !!plan.sampling_strategy.enable,
+      method: plan.sampling_strategy.method || 'representative',
+      count: plan.sampling_strategy.count || 20,
+      rules: Array.isArray(plan.sampling_strategy.rules) ? plan.sampling_strategy.rules : ['diversity']
+    }
+  }
+
   // clarification_question
   if (typeof plan.clarification_question === 'string') {
     normalized.clarification_question = plan.clarification_question
@@ -347,6 +379,8 @@ export function quickIntentClassify(question) {
     plan.query_type = 'area_analysis'
     plan.need_global_context = true
     plan.need_landmarks = true
+    plan.aggregation_strategy = { enable: true, method: 'h3', resolution: 9, max_bins: 50 }
+    plan.sampling_strategy = { enable: true, method: 'representative', count: 20, rules: ['diversity'] }
     return plan
   }
   

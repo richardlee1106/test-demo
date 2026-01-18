@@ -366,7 +366,7 @@ let rawToOlMap = new Map();
  */
 function getDeckViewState() {
   if (!map.value) {
-    return { longitude: 114.307, latitude: 30.549, zoom: 12, bearing: 0, pitch: 0 };
+    return { longitude: 114.33, latitude: 30.58, zoom: 12, bearing: 0, pitch: 0 };
   }
   const view = map.value.getView();
   const center = view.getCenter();
@@ -374,7 +374,7 @@ function getDeckViewState() {
   const rotation = view.getRotation();
   
   if (!center || zoom === undefined) {
-    return { longitude: 114.307, latitude: 30.549, zoom: 12, bearing: 0, pitch: 0 };
+    return { longitude: 114.33, latitude: 30.58, zoom: 12, bearing: 0, pitch: 0 };
   }
   
   // 将 EPSG:3857 坐标转换为经纬度
@@ -526,7 +526,7 @@ onMounted(() => {
     layers: [baseLayer, polygonLayer, centerLayer, hoverLayer, locateLayer],
     controls: [], // 移除默认控件（包括缩放按钮）
     view: new View({
-      center: fromLonLat([114.307, 30.549]),
+      center: fromLonLat([114.33, 30.58]),
       zoom: 14,
     }),
   });

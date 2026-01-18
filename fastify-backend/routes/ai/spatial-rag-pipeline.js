@@ -109,6 +109,7 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   // ========================================
   // 阶段 1: Planner - 意图解析
   // ========================================
+  yield { type: 'stage', name: 'planner' }
   stats.startStage('planner')
   
   let queryPlan
@@ -147,13 +148,14 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   // 检查是否需要澄清
   if (queryPlan.query_type === 'clarification_needed' && queryPlan.clarification_question) {
     console.log('[Pipeline] 需要澄清，直接返回澄清问题')
-    yield queryPlan.clarification_question
+    yield { type: 'text', content: queryPlan.clarification_question }
     return
   }
   
   // ========================================
   // 阶段 2: Executor - 数据库执行
   // ========================================
+  yield { type: 'stage', name: 'executor' }
   stats.startStage('executor')
   console.log('[Pipeline] 阶段2: 数据库执行...')
   
@@ -203,7 +205,7 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   
   // 如果执行失败，返回错误信息
   if (!executorResult.success) {
-    yield `抱歉，查询过程中出现问题: ${executorResult.error || '未知错误'}。请稍后重试。`
+    yield { type: 'text', content: `抱歉，查询过程中出现问题: ${executorResult.error || '未知错误'}。请稍后重试。` }
     return
   }
   
@@ -217,6 +219,7 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   // ========================================
   // 阶段 3: Writer - 生成回答
   // ========================================
+  yield { type: 'stage', name: 'writer' }
   stats.startStage('writer')
   console.log('[Pipeline] 阶段3: 生成回答...')
   
@@ -238,7 +241,7 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   let charCount = 0
   for await (const chunk of generateAnswer(userQuestion, executorResult, writerOptions)) {
     charCount += chunk.length
-    yield chunk
+    yield { type: 'text', content: chunk }
   }
   
   stats.endStage('writer', {

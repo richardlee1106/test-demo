@@ -2,7 +2,8 @@
   <div class="ai-chat-container">
     <!-- 头部状态栏 -->
     <div class="chat-header">
-      <div class="header-row-1">
+      <div class="header-main-row">
+        <!-- 左侧：头像 + 信息 -->
         <div class="header-left">
           <div class="ai-avatar">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
@@ -16,17 +17,31 @@
             </span>
           </div>
         </div>
-        <div class="poi-badge" v-if="poiCount > 0">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-          </svg>
-          <span>{{ poiCount }} 个标签</span>
+        
+        <!-- 右侧：按钮组 -->
+        <div class="header-actions">
+           <!-- POI 徽章 (在按钮组左侧，空间不足时可隐藏) -->
+           <div class="poi-badge" v-if="poiCount > 0">
+             <span class="poi-icon">📍</span>
+             <span>{{ poiCount }}</span>
+           </div>
+           
+           <button class="action-btn clear-btn" @click="clearChat" title="清空">
+             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+               <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+             </svg>
+           </button>
+           <button class="action-btn save-btn" @click="saveChatHistory" title="保存">
+             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+               <path d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+             </svg>
+           </button>
+           <button class="action-btn close-btn" @click="emit('close')" title="收起">
+             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+               <path d="M18 6L6 18M6 6l12 12" />
+             </svg>
+           </button>
         </div>
-      </div>
-      <div class="header-row-2">
-        <button class="action-btn clear-btn" @click="clearChat">清空对话</button>
-        <button class="action-btn save-btn" @click="saveChatHistory">保存对话</button>
-        <button class="action-btn close-btn" @click="emit('close')">收起面板</button>
       </div>
     </div>
 
@@ -61,43 +76,50 @@
           </template>
         </div>
         <div class="message-content">
-          <div class="message-text" v-html="renderMarkdown(msg.content)"></div>
-          <div class="message-time">{{ formatTime(msg.timestamp) }}</div>
-        </div>
-      </div>
-
-      <!-- 正在输入指示器 -->
-      <div v-if="isTyping" class="message assistant typing">
-        <div class="message-avatar">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/>
-          </svg>
-        </div>
-        <div class="message-content">
-          <div class="thinking-indicator">
-            <span class="thinking-text">GeoLoom-RAG正在思考和检索...</span>
-            <div class="typing-indicator">
-              <span></span><span></span><span></span>
+          <!-- 嵌入式 Pipeline 追踪器 (当有阶段信息时显示) -->
+          <div v-if="msg.role === 'assistant' && msg.stage" class="thinking-process-embed">
+            <div class="pipeline-trace">
+              <div class="trace-step" :class="{ 
+                active: isTyping && msg.stage === 'planner' && index === messages.length - 1, 
+                completed: msg.stage !== 'planner' || (index < messages.length - 1 || !isTyping)
+              }">
+                <div class="step-dot"></div>
+                <div class="step-label">意图规划</div>
+              </div>
+              <div class="trace-line" :class="{ completed: msg.stage !== 'planner' || (index < messages.length - 1 || !isTyping) }"></div>
+              <div class="trace-step" :class="{ 
+                active: isTyping && msg.stage === 'executor' && index === messages.length - 1, 
+                completed: ['writer'].includes(msg.stage) || (index < messages.length - 1 || !isTyping)
+              }">
+                <div class="step-dot"></div>
+                <div class="step-label">空间计算</div>
+              </div>
+              <div class="trace-line" :class="{ completed: ['writer'].includes(msg.stage) || (index < messages.length - 1 || !isTyping) }"></div>
+              <div class="trace-step" :class="{ 
+                active: isTyping && msg.stage === 'writer' && index === messages.length - 1,
+                completed: (index < messages.length - 1 || !isTyping)
+              }">
+                <div class="step-dot"></div>
+                <div class="step-label">结果生成</div>
+              </div>
+            </div>
+            <div class="thinking-subtitle-embed">
+              {{ (index < messages.length - 1 || !isTyping) ? '查询已完成' :
+                 msg.stage === 'planner' ? '正在解析您的地理查询意图...' : 
+                 msg.stage === 'executor' ? '正在调动 PostGIS 进行全量空间检索...' : 
+                 msg.stage === 'writer' ? '正在基于统计特征生成专业解读...' : 'GeoLoom-RAG 正在运行...' }}
             </div>
           </div>
+
+          <!-- 仅在有内容时显示消息气泡内容 -->
+          <div v-if="msg.content && msg.content.trim()" class="message-text" v-html="renderMarkdown(msg.content)"></div>
+          <div v-if="msg.content && msg.content.trim()" class="message-time">{{ formatTime(msg.timestamp) }}</div>
         </div>
       </div>
+
     </div>
 
-    <!-- AI 提取的 POI 操作区域 -->
-    <div v-if="extractedPOIs.length > 0" class="extracted-pois-area">
-      <div class="extracted-pois-header">
-        <span class="extracted-pois-icon">📍</span>
-        <span>AI 检索到 {{ extractedPOIs.length }} 个 POI</span>
-        <button class="render-tagcloud-btn" @click="renderToTagCloud">
-          渲染到标签云
-        </button>
-        <button class="clear-extracted-btn" @click="clearExtractedPOIs">清除</button>
-      </div>
-      <div class="extracted-pois-preview">
-        {{ extractedPOIs.slice(0, 5).map(p => p.name).join('、') }}{{ extractedPOIs.length > 5 ? '...' : '' }}
-      </div>
-    </div>
+
 
     <!-- 输入区域 -->
     <div class="chat-input-area">
@@ -122,7 +144,7 @@
         </button>
       </div>
       <div class="input-hint">
-        <span v-if="!isOnline" class="offline-hint">⚠️ AI 服务未连接，请确保 LM Studio 正在运行</span>
+        <span v-if="!isOnline" class="offline-hint">AI 服务未连接</span>
         <span v-else>按 Enter 发送，Shift+Enter 换行</span>
       </div>
     </div>
@@ -179,6 +201,7 @@ const emit = defineEmits(['close', 'render-to-tagcloud']);
 const messages = ref([]);
 const inputText = ref('');
 const isTyping = ref(false);
+const currentStage = ref(''); // 'planner', 'executor', 'writer'
 const isOnline = ref(false);
 const messagesContainer = ref(null);
 const inputRef = ref(null);
@@ -281,11 +304,16 @@ async function sendMessage() {
       props.poiFeatures, // POI 数据发送到后端
       // 接收元数据回调
       (type, data) => {
+        if (type === 'stage') {
+          currentStage.value = data;
+          // 将当前阶段记录在消息对象中，以便持久化显示
+          if (messages.value[aiMessageIndex]) {
+            messages.value[aiMessageIndex].stage = data;
+          }
+        }
         if (type === 'pois' && Array.isArray(data)) {
            console.log('[AiChat] 收到后端结构化 POI 数据:', data.length);
-           // 保存带有坐标的完整 POI 数据
            extractedPOIs.value = data;
-           // 标记为已从后端获取，防止被 markdown由于解析覆盖（虽然 watch 还是会跑，但我们可以改进 watch）
         }
       }
     );
@@ -299,6 +327,7 @@ async function sendMessage() {
     });
   } finally {
     isTyping.value = false;
+    currentStage.value = '';
     await nextTick();
     scrollToBottom();
   }
@@ -632,40 +661,34 @@ defineExpose({
 
 /* 头部 */
 .chat-header {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px 20px;
-  background: rgba(15, 23, 42, 0.85); /* 稍微透明，透出背景 */
+  padding: 12px 16px;
+  background: rgba(15, 23, 42, 0.95);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
-  position: relative;
   z-index: 10;
 }
 
-.header-row-1 {
+.header-main-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  width: 100%;
 }
-
-.header-row-2 {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: nowrap; /* 移动端也不要换行，使用滚动 */
-  overflow-x: auto;
-  padding-bottom: 4px;
-}
-
-/* 隐藏滚动条 */
-.header-row-2::-webkit-scrollbar { display: none; }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex: 1; /* 占据剩余空间 */
+  overflow: hidden; /* 防止文字过长挤压按钮 */
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .ai-avatar {
@@ -729,26 +752,35 @@ defineExpose({
 .poi-badge {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  background: rgba(99, 102, 241, 0.15);
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(99, 102, 241, 0.1);
   border: 1px solid rgba(99, 102, 241, 0.2);
-  border-radius: 12px;
-  font-size: 12px;
+  border-radius: 6px;
+  font-size: 11px;
   font-weight: 600;
   color: #a5b4fc;
+  margin-right: 4px;
 }
 
-/* 操作按钮通用样式重构 */
+.poi-icon {
+  font-size: 10px;
+}
+
+/* 操作按钮通用样式重构 - 迷你图标版 */
 .action-btn {
-  padding: 6px 12px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid transparent;
-  border-radius: 10px;
-  font-size: 12px;
-  font-weight: 600;
+  border-radius: 6px;
   cursor: pointer;
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.05);
+  color: #94a3b8;
 }
 
 .clear-btn {
@@ -1074,31 +1106,115 @@ defineExpose({
   40% { transform: scale(1); opacity: 1; }
 }
 
-/* 思考中指示器 */
-.thinking-indicator {
+/* 新版 Pipeline 追踪器样式 (嵌入式) */
+.thinking-process-embed {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  margin-bottom: 8px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
+  width: 500px; /* 固定宽度，确保从起始到结束的长度一致 */
+  max-width: 100%; /* 适配移动端，不超出屏幕 */
+}
+
+.pipeline-trace {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
-  background: rgba(55, 65, 81, 0.6);
-  border-radius: 16px;
-  border: 1px solid rgba(99, 102, 241, 0.3);
-  animation: pulse-border 2s infinite;
+  justify-content: space-between;
+  width: 100%;
+  position: relative;
+  padding: 0 4px; /* 减少内边距 */
 }
 
-.thinking-text {
-  font-size: 14px;
-  color: #a5b4fc;
-  font-weight: 500;
+.trace-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px; /* 进一步增加间距 */
+  z-index: 2;
+  position: relative;
+  flex: 1;
 }
 
-.thinking-indicator .typing-indicator {
-  padding: 0;
+.step-dot {
+  width: 14px; /* 继续调大 */
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
 }
 
-@keyframes pulse-border {
-  0%, 100% { border-color: rgba(99, 102, 241, 0.3); }
-  50% { border-color: rgba(99, 102, 241, 0.6); }
+.step-dot::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  border-radius: 50%;
+  border: 1.5px solid transparent; /* 边框稍微加粗 */
+  transition: all 0.3s ease;
+}
+
+.trace-step.active .step-dot {
+  background: #00BFFF;
+  box-shadow: 0 0 12px rgba(0, 191, 255, 0.8);
+  transform: scale(1.2);
+}
+
+.trace-step.active .step-dot::after {
+  border-color: rgba(0, 191, 255, 0.4);
+  animation: pulse-ring 1.5s infinite linear;
+}
+
+.trace-step.completed .step-dot {
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
+}
+
+.step-label {
+  font-size: 12px; /* 调大标签字体 */
+  color: rgba(255, 255, 255, 0.5); 
+  transition: all 0.3s ease;
+  white-space: nowrap;
+}
+
+.trace-step.active .step-label {
+  color: #00BFFF;
+  font-weight: 600;
+}
+
+.trace-step.completed .step-label {
+  color: #10b981;
+}
+
+.trace-line {
+  height: 2px;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.15);
+  margin: 0 -15px; /* 适配更大的点 */
+  transform: translateY(-16px); /* 向上偏移对齐 dot (12 + 10 + 7 / 2 = ~16px) */
+  transition: all 0.5s ease;
+  z-index: 1;
+}
+
+.trace-line.completed {
+  background: #10b981;
+}
+
+.thinking-subtitle-embed {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: center;
+  font-style: italic;
+  min-height: 16px;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  100% { transform: scale(1.8); opacity: 0; }
 }
 
 /* 输入区域 */
