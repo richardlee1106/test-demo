@@ -113,6 +113,18 @@
 
           <!-- 仅在有内容时显示消息气泡内容 -->
           <div v-if="msg.content && msg.content.trim()" class="message-text" v-html="renderMarkdown(msg.content)"></div>
+          
+          <!-- 嵌入式标签云（在文本下方显示，增加视觉引导） -->
+          <EmbeddedTagCloud 
+            v-if="msg.role === 'assistant' && msg.pois && msg.pois.length > 0"
+            :pois="msg.pois"
+            :intent-mode="msg.intentMode || 'macro'"
+            :width="360"
+            :height="200"
+            @render-to-map="handleRenderToMap"
+            @tag-click="handleTagClick"
+          />
+
           <div v-if="msg.content && msg.content.trim()" class="message-time">{{ formatTime(msg.timestamp) }}</div>
         </div>
       </div>
@@ -152,12 +164,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, nextTick, computed } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import { 
   sendChatMessageStream, 
   checkAIService, 
   getCurrentProviderInfo
 } from '../utils/aiService.js';
+import EmbeddedTagCloud from './EmbeddedTagCloud.vue';
 
 const props = defineProps({
   // 当前选中的 POI 数据
@@ -195,7 +208,7 @@ const props = defineProps({
 });
 
 // 定义事件
-const emit = defineEmits(['close', 'render-to-tagcloud']);
+const emit = defineEmits(['close', 'render-to-tagcloud', 'render-pois-to-map']);
 
 // 响应式状态
 const messages = ref([]);
@@ -314,6 +327,12 @@ async function sendMessage() {
         if (type === 'pois' && Array.isArray(data)) {
            console.log('[AiChat] 收到后端结构化 POI 数据:', data.length);
            extractedPOIs.value = data;
+           // 将 POI 数据附加到消息对象，供嵌入式标签云使用
+           if (messages.value[aiMessageIndex]) {
+             messages.value[aiMessageIndex].pois = data;
+             messages.value[aiMessageIndex].intentMode = 
+               options.spatialContext?.mode === 'Polygon' ? 'micro' : 'macro';
+           }
         }
       }
     );
@@ -337,6 +356,21 @@ async function sendMessage() {
 function sendQuickAction(prompt) {
   inputText.value = prompt;
   sendMessage();
+}
+
+// 标签云：渲染至地图
+function handleRenderToMap(pois) {
+  console.log('[AiChat] 渲染 POI 到地图:', pois.length);
+  emit('render-pois-to-map', pois);
+}
+
+// 标签云：标签点击
+function handleTagClick(tag) {
+  console.log('[AiChat] 标签点击:', tag.name);
+  // 可以触发地图定位到该 POI
+  if (tag.originalPoi) {
+    emit('render-pois-to-map', [tag.originalPoi]);
+  }
 }
 
 // 清空对话
@@ -370,12 +404,43 @@ function saveChatHistory() {
   URL.revokeObjectURL(url);
 }
 
-// 滚动到底部
-function scrollToBottom() {
+// 滚动状态
+const userScrolledUp = ref(false)
+
+onMounted(() => {
   if (messagesContainer.value) {
-    messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight;
+    messagesContainer.value.addEventListener('scroll', handleScroll)
   }
+})
+
+function handleScroll() {
+  const el = messagesContainer.value
+  if (!el) return
+  // 如果距离底部超过 50px，认为用户向上滚动了
+  const isAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
+  userScrolledUp.value = !isAtBottom
 }
+
+// 滚动到底部 (平滑)
+function scrollToBottom(force = false) {
+  if (userScrolledUp.value && !force) return
+  
+  // 使用 nextTick 确保 DOM 更新后滚动
+  nextTick(() => {
+    if (messagesContainer.value) {
+      messagesContainer.value.scrollTo({
+        top: messagesContainer.value.scrollHeight,
+        behavior: 'smooth'
+      })
+    }
+  })
+}
+
+onUnmounted(() => {
+  if (messagesContainer.value) {
+    messagesContainer.value.removeEventListener('scroll', handleScroll)
+  }
+})
 
 // 插入换行
 function insertNewline(e) {

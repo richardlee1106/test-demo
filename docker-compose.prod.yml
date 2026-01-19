@@ -20,7 +20,7 @@ services:
       - "5432:5432"
     volumes:
       # 直接映射宿主机物理目录，不再使用 Docker 自动管理的内部卷，防止路径混乱
-      - /mnt/data/geoloom_db_data:/var/lib/postgresql/data
+      - /geoloom_db_data:/var/lib/postgresql/data
       - ./docker-init-spatial:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -46,9 +46,11 @@ services:
     environment:
       - POSTGRES_HOST=spatial-db
       - POSTGRES_PORT=5432
+      - POSTGRES_DATABASE=geoloom
+      - POSTGRES_DB=geoloom
       - PORT=3000
     ports:
-      - "3002:3000"
+      - "3000:3000"
     depends_on:
       spatial-db:
         condition: service_healthy

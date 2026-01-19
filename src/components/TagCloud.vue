@@ -52,7 +52,7 @@ import SpiralWorker from '../workers/spiral.worker.js?worker';
 import GeoWorker from '../workers/geo.worker.js?worker';
 import GravityWorker from '../workers/gravity.worker.js?worker';
 import { fromLonLat } from 'ol/proj';
-import { ElMessage } from 'element-plus';
+import { ElNotification } from 'element-plus';
 import { rasterExtractor } from '../utils/RasterExtractor.js';
 
 // 定义组件事件
@@ -378,7 +378,7 @@ async function handleWeightChange(value) {
   if (value === 'population') {
     // 如果栅格已加载，直接使用
     if (rasterExtractor.loaded) {
-      ElMessage.success('人口密度栅格已就绪，权重将在下次布局时生效');
+      ElNotification.success({ title: '成功', message: '人口密度栅格已就绪，权重将在下次布局时生效', offset: 80 });
       rasterLoaded.value = true;
       // 触发重新布局
       scheduleRunLayout();
@@ -395,22 +395,24 @@ async function handleWeightChange(value) {
       if (success) {
         rasterLoaded.value = true;
         const metadata = rasterExtractor.getMetadata();
-        ElMessage.success({
+        ElNotification.success({
+          title: '加载成功',
           message: `人口密度栅格加载成功！尺寸: ${metadata.width}×${metadata.height}`,
-          duration: 3000
+          duration: 3000,
+          offset: 80
         });
         // 触发重新布局以应用权重
         scheduleRunLayout();
       } else {
         selectedWeight.value = '';
         rasterLoaded.value = false;
-        ElMessage.error('人口密度栅格加载失败，请检查文件路径');
+        ElNotification.error({ title: '加载失败', message: '人口密度栅格加载失败，请检查文件路径', offset: 80 });
       }
     } catch (error) {
       console.error('[TagCloud] 栅格加载错误:', error);
       selectedWeight.value = '';
       rasterLoaded.value = false;
-      ElMessage.error(`加载失败: ${error.message}`);
+      ElNotification.error({ title: '错误', message: `加载失败: ${error.message}`, offset: 80 });
     } finally {
       rasterLoading.value = false;
     }
@@ -1010,6 +1012,7 @@ defineExpose({
   text-transform: uppercase;
   background: linear-gradient(to right, #6366f1, #a855f7);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   animation: breathing 3s ease-in-out infinite;
   user-select: none;

@@ -29,16 +29,7 @@
           inactive-text="关闭"
         />
       </div>
-      <div class="control-row">
-        <span class="filter-label">筛选叠加</span>
-        <el-switch 
-          v-model="overlayEnabled" 
-          @change="toggleOverlay"
-          inline-prompt
-          active-text="开启"
-          inactive-text="关闭"
-        />
-      </div>
+      
       
       <!-- 新增：标签权重控件 -->
       <div class="control-divider"></div>
@@ -181,8 +172,7 @@ let hoveredFeature = null;
 const filterEnabled = ref(props.filterEnabled);
 // 热力图开关状态
 const heatmapEnabled = ref(props.heatmapEnabled);
-// 叠加模式开关状态
-const overlayEnabled = ref(props.overlayEnabled);
+
 
 // ============ 权重控制相关状态 ============
 const weightEnabled = ref(props.weightEnabled); // 标签权重开关
@@ -191,7 +181,7 @@ const showWeightValue = ref(props.showWeightValue); // 显示权重值开关
 // 监听 props 变化同步内部状态
 watch(() => props.filterEnabled, (val) => { filterEnabled.value = val; });
 watch(() => props.heatmapEnabled, (val) => { heatmapEnabled.value = val; });
-watch(() => props.overlayEnabled, (val) => { overlayEnabled.value = val; });
+
 watch(() => props.weightEnabled, (val) => { weightEnabled.value = val; });
 watch(() => props.showWeightValue, (val) => { showWeightValue.value = val; });
 
@@ -217,9 +207,7 @@ const toggleFilter = (val) => {
   emit('toggle-filter', val);
 };
 
-const toggleOverlay = (val) => {
-  emit('toggle-overlay', val);
-};
+
 
 /**
  * 处理标签权重开关变化

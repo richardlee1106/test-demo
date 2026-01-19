@@ -14,6 +14,7 @@ import { getLLMConfig } from '../../services/llm.js'
  */
 export const QUERY_PLAN_DEFAULTS = {
   query_type: 'area_analysis',
+  intent_mode: null, // 'macro_overview' | 'local_search'
   anchor: {
     type: 'unknown',
     name: null,
@@ -22,11 +23,11 @@ export const QUERY_PLAN_DEFAULTS = {
     lat: null,
     lon: null
   },
-  radius_m: 1000,
+  radius_m: 3000,  // 增加默认半径
   categories: [],
   rating_range: [null, null],
   semantic_query: '',
-  max_results: 20,
+  max_results: 30,  // 增加默认结果数
   sort_by: 'distance',
   
   // 三通道核心配置
@@ -34,12 +35,12 @@ export const QUERY_PLAN_DEFAULTS = {
     enable: false,
     method: 'h3',       // 'h3' | 'cluster' | 'administrative'
     resolution: 9,      // H3 分辨率
-    max_bins: 50        // 传给 Writer 的最大网格/聚类数
+    max_bins: 60        // 传给 Writer 的最大网格/聚类数 (增加)
   },
   sampling_strategy: {
     enable: false,
     method: 'representative', // 'representative' | 'random' | 'top_k'
-    count: 20,                // 采样数量 (代表点)
+    count: 50,                // 默认 50，支持 coarse aggregation
     rules: ['diversity']      // 采样规则: 'diversity' (多样性), 'density' (高密区), 'outlier' (异常点)
   },
   
@@ -55,76 +56,100 @@ export const QUERY_PLAN_DEFAULTS = {
  */
 const PLANNER_SYSTEM_PROMPT = `你是一个"空间查询规划器"，职责是将自然语言转换为结构化 QueryPlan。
 
-## 核心职责：决策通道
-根据数据规模和问题类型，决定是看"全量明细"还是看"统计聚合"。
+## 核心职责：区分"宏观概括"与"微观检索"
+这是最关键的决策！你必须判断用户是想看**整体区域的统计特征**，还是想找**具体的点**。
 
-### 1. 明细通道 (Small Data / Search)
-- **场景**：找具体的店、问某个点详情、数据量小(<50个)。
-- **配置**：aggregation_strategy.enable=false
-- **结果**：Executor 返回具体的 POI 列表。
+### 模式 A: 宏观概括 (Macro Overview) / query_type="area_analysis"
+- **用户意图**：了解区域整体情况、分布规律、业态结构、交通便利度等。
+- **典型提问**："分析这片区域"、"这里有什么特点"、"交通怎么样"、"商业分布如何"。
+- **配置**：
+  - \`query_type\`: "area_analysis"
+  - \`intent_mode\`: "macro_overview"
+  - \`aggregation_strategy.enable\`: true (必须开启! 看统计数据)
+  - \`radius_m\`: 3000 ~ 5000 (大范围)
+  - \`sampling_strategy.enable\`: true (选代表点)
+  - \`categories\`: 
+    - 问"交通": ["公交站", "地铁站", "停车场", ...]
+    - 问"商业": ["商场", "超市", ...]
+    - 问"整体": [] (空数组代表全域)
 
-### 2. 统计通道 (Big Data / Pattern)
-- **场景**：分析区域分布、热力图、业态结构、"这里有什么特点"、数据量大(>500个)。
-- **配置**：aggregation_strategy.enable=true (使用 H3 网格聚合)
-- **结果**：Executor 返回 H3 网格统计 + 只有少量代表点。
-
-### 3. 混合通道 (Sampling)
-- **场景**：既要看整体分布，又想看几个典型例子。
-- **配置**：aggregation_strategy.enable=true, sampling_strategy.enable=true (选 representative)
+### 模式 B: 微观检索 (Local Search) / query_type="poi_search"
+- **用户意图**：寻找特定的店、设施，或者查询某个具体地点周边的信息。
+- **典型提问**："附近有好吃的吗"、"找最近的咖啡馆"、"武汉大学附近有什么"、"哪里有停车场"。
+- **配置**：
+  - \`query_type\`: "poi_search"
+  - \`intent_mode\`: "local_search"
+  - \`aggregation_strategy.enable\`: false (看明细!)
+  - \`radius_m\`: 500 ~ 1500 (小范围)
+  - \`categories\`: 必须指定具体类别! (如 ["咖啡厅", "中餐厅"])
+  - \`max_results\`: 10 ~ 20
 
 ## JSON 结构定义
 {
-  "query_type": "poi_search" | "area_analysis" | "recommendation",
+  "query_type": "area_analysis" | "poi_search" | "distance_query",
+  "intent_mode": "macro_overview" | "local_search", // 显式标记意图模式
   "anchor": { ... },
   "radius_m": number,
-  "categories": ["cat1", "cat2"],
-  "semantic_query": "...",
+  "categories": ["cat1", "cat2"], 
+  "semantic_query": "...", // 用于 pgvector 搜索
   
-  // 聚合策略 (关键)
   "aggregation_strategy": {
-    "enable": boolean,      // 是否启用空间聚合
-    "method": "h3",         // 固定为 h3
-    "resolution": number,   // 8(大范围) ~ 10(小范围), 默认 9
-    "max_bins": number      // 给 Writer 看多少个网格 (建议 20-50)
+    "enable": boolean,
+    "method": "h3",
+    "resolution": number
   },
   
-  // 采样策略 (关键)
-  "sampling_strategy": {
-    "enable": boolean,      // 是否需要代表点
-    "method": "representative", 
-    "count": number,        // 代表点数量 (建议 5-20)
-    "rules": ["diversity", "density"] // 优先展示多样性还是高密区?
-  },
-
-  "need_global_context": boolean, // 是否计算全局统计(Gini/分布图)
-  "need_landmarks": boolean
+  "sampling_strategy": { ... }
 }
 
-## 核心规则 (CRITICAL)
-1. **禁止臆造类别**：如果用户只说"分析这里","有什么特点"而未指定具体类别（如餐饮,学校）, \`categories\` 必须为 \`[]\` (空数组)，代表全域/全类目分析。
-   ❌ 错误：用户问"分析分布"，输出 'categories': ["restaurant", "cafe"]
-   ✅ 正确：用户问"分析分布"，输出 'categories': []
-2. **类别映射**：如果用户确实提到了类别，请映射为中文标准大类：
-   - "吃饭" -> ["餐饮"]
-   - "玩" -> ["风景名胜", "休闲娱乐"]
-   - "买东西" -> ["购物"]
-3. **距离默认值**：分析类请求默认 radius=3000 (3km)，找店类默认 radius=1000 (1km of search).
+## 类别映射表 (必须严格遵守)
+| 领域 | 关键词 | categories |
+|---|---|---|
+| **交通/通勤** | 交通,出行,公交,地铁,停车 | ["公交站", "地铁站", "停车场", "加油站", "火车站"] |
+| **教育/学校** | 教育,上学,学校,培训 | ["学校", "幼儿园", "小学", "中学", "大学", "培训机构"] |
+| **医疗/健康** | 医院,看病,药店 | ["医院", "诊所", "药店", "社区卫生服务中心"] |
+| **购物/商业** | 购物,商场,买东西 | ["商场", "购物中心", "超市", "便利店"] |
+| **餐饮/美食** | 吃饭,好吃的,餐厅 | ["餐厅", "中餐厅", "快餐", "小吃", "咖啡厅"] |
 
-## 决策逻辑 (Thinking logic)
-1. **用户问"分布"、"规律"、"概况"** → enable aggregation(res=9), enable sampling(count=10), need_global_context=true. 并且 categories 设为 [] (除非用户缩范围).
-2. **用户问"有没有..."、"找几个..."、"推荐..."** → disable aggregation, result count 10-20.
-3. **区域范围大 (>2km) 或 没指定具体类别 (全域)** → enable aggregation(res=8), enable sampling(count=20).
-4. **范围小 (<500m) 且 类别明确** → disable aggregation, return raw POIs.
+## 决策逻辑
+1. **关键词匹配**：
+   - 有"分析"、"概况"、"特征"、"分布"、"便利度" → **Macro Overview**
+   - 有"附近"、"最近"、"找..."、"哪里有" → **Local Search**
+
+2. **语义推断**：
+   - "评估当前区域交通" → Area Analysis (Traffic Topic)
+   - "最近的地铁站在哪" → POI Search (Traffic Topic)
+
+3. **Pgvector 触发**：
+   - 凡是意图模糊或涉及形容词（"好玩的", "高档的"），必须生成 \`semantic_query\`。
 
 ## 示例
 
-用户问："分析一下这片区域的分布特征" (未指定类别 -> 全域)
+用户："评估当前区域的交通便利程度"
 输出：
-{"query_type":"area_analysis","aggregation_strategy":{"enable":true,"method":"h3","resolution":9,"max_bins":30},"sampling_strategy":{"enable":true,"method":"representative","count":10},"categories":[],"need_global_context":true}
+{
+  "query_type": "area_analysis",
+  "intent_mode": "macro_overview",
+  "categories": ["公交站", "地铁站", "停车场", "加油站", "火车站"],
+  "radius_m": 3000,
+  "aggregation_strategy": { "enable": true, "method": "h3", "resolution": 9 },
+  "sampling_strategy": { "enable": true, "count": 25 },
+  "semantic_query": "交通便利度 交通枢纽 公交站 地铁站",
+  "need_landmarks": true
+}
 
-用户问："帮我找最近的咖啡馆"
+用户："武汉大学附近有什么好吃的"
 输出：
-{"query_type":"poi_search","aggregation_strategy":{"enable":false},"categories":["咖啡","咖啡厅"],"max_results":10}
+{
+  "query_type": "poi_search",
+  "intent_mode": "local_search",
+  "anchor": { "type": "landmark", "name": "武汉大学" },
+  "categories": ["餐厅", "中餐厅", "小吃", "快餐"],
+  "radius_m": 1000,
+  "aggregation_strategy": { "enable": false },
+  "semantic_query": "美食 餐厅 好吃的",
+  "max_results": 20
+}
 `
 
 /**
@@ -253,13 +278,23 @@ function validateAndNormalize(plan) {
   normalized.need_landmarks = !!plan.need_landmarks
   normalized.need_graph_reasoning = !!plan.need_graph_reasoning
   
+  // intent_mode (支持宏观/微观意图)
+  if (['macro_overview', 'local_search'].includes(plan.intent_mode)) {
+    normalized.intent_mode = plan.intent_mode
+  } else {
+    // 简单的推断
+    if (normalized.query_type === 'poi_search') normalized.intent_mode = 'local_search'
+    else if (normalized.query_type === 'area_analysis') normalized.intent_mode = 'macro_overview'
+  }
+  
   // aggregation_strategy
   if (plan.aggregation_strategy) {
     normalized.aggregation_strategy = {
       enable: !!plan.aggregation_strategy.enable,
       method: 'h3',
-      resolution: plan.aggregation_strategy.resolution || 9,
-      max_bins: plan.aggregation_strategy.max_bins || 50
+      // 允许根据范围动态调整: 大范围用8，小范围用9或10
+      resolution: plan.aggregation_strategy.resolution || (normalized.radius_m > 5000 ? 8 : 9),
+      max_bins: plan.aggregation_strategy.max_bins || (normalized.radius_m > 5000 ? 60 : 50)
     }
   }
 
@@ -268,7 +303,8 @@ function validateAndNormalize(plan) {
     normalized.sampling_strategy = {
       enable: !!plan.sampling_strategy.enable,
       method: plan.sampling_strategy.method || 'representative',
-      count: plan.sampling_strategy.count || 20,
+      // 【强制修复】宏观分析模式下，强制设为 50，不管 LLM 说了什么
+      count: (normalized.intent_mode === 'macro_overview' || normalized.query_type === 'area_analysis') ? 50 : (plan.sampling_strategy.count || 20),
       rules: Array.isArray(plan.sampling_strategy.rules) ? plan.sampling_strategy.rules : ['diversity']
     }
   }
@@ -278,7 +314,90 @@ function validateAndNormalize(plan) {
     normalized.clarification_question = plan.clarification_question
   }
   
+  // 语义查询增强逻辑
+  if (!normalized.semantic_query) {
+    if (normalized.intent_mode === 'macro_overview') {
+       // 宏观模式：地标优先
+       normalized.semantic_query = '具有代表性的地标 购物中心 商场 大厦 广场 公园 医院 学校 交通枢纽'
+       console.log('[Planner] 宏观模式：自动生成全域地标语义查询')
+    } else if (normalized.intent_mode === 'local_search' && normalized.categories.length > 0) {
+       // 微观搜索：基于类别生成 (e.g. "好吃的 餐厅")
+       normalized.semantic_query = `好评 ${normalized.categories.join(' ')}`
+       console.log('[Planner] 微观模式：自动生成基于类别的语义查询:', normalized.semantic_query)
+    }
+  }
+  
   return normalized
+}
+
+/**
+ * 根据用户问题自动推断 POI 类别（后备逻辑）
+ * 当 LLM 没有正确识别专题时，后端自动补充
+ */
+function inferCategoriesFromQuestion(question, existingCategories) {
+  // 如果已经有非空 categories，直接返回
+  if (existingCategories && existingCategories.length > 0) {
+    return existingCategories
+  }
+  
+  const q = question.toLowerCase()
+  
+  // 专题关键词映射表
+  const topicMapping = {
+    // 交通相关
+    traffic: {
+      keywords: ['交通', '出行', '通勤', '公交', '地铁', '火车', '机场', '停车'],
+      categories: ['公交站', '地铁站', '停车场', '加油站', '高铁站', '火车站', '汽车站', '机场']
+    },
+    // 教育相关
+    education: {
+      keywords: ['教育', '学校', '上学', '幼儿园', '小学', '中学', '大学', '培训'],
+      categories: ['学校', '幼儿园', '小学', '中学', '高中', '大学', '培训机构', '图书馆']
+    },
+    // 医疗相关
+    medical: {
+      keywords: ['医疗', '看病', '就医', '医院', '诊所', '药店', '卫生'],
+      categories: ['医院', '诊所', '卫生院', '药店', '社区卫生服务中心']
+    },
+    // 购物相关
+    shopping: {
+      keywords: ['购物', '买东西', '商场', '超市', '商业'],
+      categories: ['商场', '超市', '购物中心', '百货', '便利店']
+    },
+    // 餐饮相关
+    food: {
+      keywords: ['餐饮', '吃饭', '美食', '餐厅', '小吃'],
+      categories: ['餐厅', '饭店', '快餐', '小吃', '咖啡', '奶茶']
+    },
+    // 休闲娱乐
+    entertainment: {
+      keywords: ['娱乐', '休闲', '玩', '电影', '公园', '景点'],
+      categories: ['电影院', 'KTV', '游乐场', '公园', '景区', '健身房']
+    },
+    // 金融相关
+    finance: {
+      keywords: ['银行', '金融', 'ATM', '理财'],
+      categories: ['银行', 'ATM', '证券', '保险']
+    },
+    // 住宿相关
+    lodging: {
+      keywords: ['住宿', '酒店', '宾馆', '民宿'],
+      categories: ['酒店', '宾馆', '民宿', '公寓']
+    }
+  }
+  
+  // 检测匹配的专题
+  for (const [topic, config] of Object.entries(topicMapping)) {
+    for (const keyword of config.keywords) {
+      if (q.includes(keyword)) {
+        console.log(`[Planner] 后备推断：检测到专题 "${topic}"，自动设置 categories`)
+        return config.categories
+      }
+    }
+  }
+  
+  // 没有匹配的专题，返回空数组（全域分析）
+  return []
 }
 
 /**
@@ -338,8 +457,12 @@ export async function parseIntent(userQuestion, context = {}) {
     const rawPlan = extractJSON(content)
     const queryPlan = validateAndNormalize(rawPlan)
     
+    // 关键后备逻辑：如果 LLM 没有正确设置 categories，根据问题自动推断
+    queryPlan.categories = inferCategoriesFromQuestion(userQuestion, queryPlan.categories)
+    
     const duration = Date.now() - startTime
     console.log(`[Planner] 解析完成 (${duration}ms): ${queryPlan.query_type}`)
+    console.log(`[Planner] categories: ${queryPlan.categories.join(', ') || '(全域分析)'}`)
     console.log(`[Planner] QueryPlan:`, JSON.stringify(queryPlan).slice(0, 200))
     
     return {
@@ -374,29 +497,53 @@ export function quickIntentClassify(question) {
   const q = question.toLowerCase()
   const plan = { ...QUERY_PLAN_DEFAULTS }
   
-  // 区域分析关键词
-  if (q.includes('分析') || q.includes('分布') || q.includes('特征') || q.includes('概况')) {
-    plan.query_type = 'area_analysis'
-    plan.need_global_context = true
-    plan.need_landmarks = true
-    plan.aggregation_strategy = { enable: true, method: 'h3', resolution: 9, max_bins: 50 }
-    plan.sampling_strategy = { enable: true, method: 'representative', count: 20, rules: ['diversity'] }
+  // 1. 明确的微观检索 (Local Search)
+  // 关键词：附近、周围、周边、最近、找、哪里有、有没有、推荐几个
+  const localKeywords = ['附近', '周围', '周边', '最近', '找', '哪里有', '有没有', '推荐几个']
+  if (localKeywords.some(kw => q.includes(kw))) {
+    plan.query_type = 'poi_search'
+    plan.intent_mode = 'local_search'
+    plan.radius_m = 1000 // 默认小范围
+    plan.aggregation_strategy.enable = false // 不聚合，看明细
+    
+    // 尝试提取类别
+    const categories = inferCategoriesFromQuestion(q, [])
+    if (categories.length > 0) {
+      plan.categories = categories
+    } else {
+      // 尝试从问题中截取（简单启发式）
+      const match = q.match(/(?:找|哪里有|有没有)(.+)/)
+      if (match) {
+        plan.semantic_query = match[1].trim()
+      }
+    }
     return plan
   }
   
-  // POI 搜索关键词
-  const categoryKeywords = ['咖啡', '蛋糕', '餐厅', '饭店', '超市', '便利店', '药店', '银行', '地铁', '学校']
-  for (const kw of categoryKeywords) {
-    if (q.includes(kw)) {
-      plan.query_type = 'poi_search'
-      plan.categories = [kw]
-      return plan
-    }
+  // 2. 明确的宏观分析 (Macro Overview)
+  // 关键词：分析、概况、特征、规律、分布、评估、怎么样、如何、特点、报告
+  const macroKeywords = ['分析', '概况', '特征', '规律', '分布', '评估', '怎么样', '如何', '特点', '报告']
+  if (macroKeywords.some(kw => q.includes(kw))) {
+    plan.query_type = 'area_analysis'
+    plan.intent_mode = 'macro_overview'
+    plan.radius_m = 3000 // 默认大范围
+    
+    // 必须开启聚合
+    plan.aggregation_strategy = { enable: true, method: 'h3', resolution: 9, max_bins: 60 }
+    plan.sampling_strategy = { enable: true, method: 'representative', count: 50, rules: ['diversity'] }
+    plan.need_global_context = true
+    plan.need_landmarks = true
+    
+    // 专题推断
+    plan.categories = inferCategoriesFromQuestion(q, [])
+    return plan
   }
   
-  // 默认返回区域分析
+  // 3. 默认兜底：倾向于分析，但不做强假设
   plan.query_type = 'area_analysis'
-  plan.need_global_context = true
+  plan.intent_mode = 'macro_overview' // 默认为宏观
+  plan.categories = inferCategoriesFromQuestion(q, [])
+  
   return plan
 }
 

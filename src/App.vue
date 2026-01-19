@@ -53,9 +53,11 @@
                       @loading-change="isLoading = $event"
                       v-model:filterEnabled="filterEnabled"
                       v-model:heatmapEnabled="heatmapEnabled"
-                      v-model:overlayEnabled="overlayEnabled"
                       v-model:weightEnabled="weightEnabled"
                       v-model:showWeightValue="showWeightValue"
+                      @data-removed="handleDataRemoved"
+                      :mapBounds="mapBounds"
+                      :selectedPolygon="selectedPolygon"
                       :globalAnalysisEnabled="globalAnalysisEnabled" />
       </div>
 
@@ -79,9 +81,11 @@
                       :on-run-algorithm="handleRunAlgorithm"
                       v-model:filterEnabled="filterEnabled"
                       v-model:heatmapEnabled="heatmapEnabled"
-                      v-model:overlayEnabled="overlayEnabled"
                       v-model:weightEnabled="weightEnabled"
                       v-model:showWeightValue="showWeightValue"
+                      @data-removed="handleDataRemoved"
+                      :mapBounds="mapBounds"
+                      :selectedPolygon="selectedPolygon"
                       :globalAnalysisEnabled="globalAnalysisEnabled" />
       </div>
     </header>
@@ -101,9 +105,11 @@
                     :on-run-algorithm="handleRunAlgorithm"
                     v-model:filterEnabled="filterEnabled"
                     v-model:heatmapEnabled="heatmapEnabled"
-                    v-model:overlayEnabled="overlayEnabled"
                     v-model:weightEnabled="weightEnabled"
                     v-model:showWeightValue="showWeightValue"
+                    @data-removed="handleDataRemoved"
+                    :mapBounds="mapBounds"
+                    :selectedPolygon="selectedPolygon"
                     :globalAnalysisEnabled="globalAnalysisEnabled" />
     </header>
     <main 
@@ -124,7 +130,6 @@
                           :hovered-feature-id="hoveredFeatureId"
                           :filter-enabled="filterEnabled"
                           :heatmap-enabled="heatmapEnabled"
-                          :overlay-enabled="overlayEnabled"
                           :weight-enabled="weightEnabled"
                           :show-weight-value="showWeightValue"
                           :global-analysis-enabled="globalAnalysisEnabled"
@@ -134,7 +139,6 @@
                           @click-feature="handleFeatureClick"
                           @map-move-end="handleMapMoveEnd"
                           @toggle-filter="filterEnabled = $event"
-                          @toggle-overlay="overlayEnabled = $event"
                           @weight-change="handleWeightChange"
                           @global-analysis-change="globalAnalysisEnabled = $event" />
           </div>
@@ -147,7 +151,7 @@
         </div>
         
         <!-- 移动端 AI 面板遮罩层（点击收起） -->
-        <div v-if="isAiExpanded" class="mobile-ai-mask mobile-only-block" @click="isAiExpanded = false"></div>
+        <div v-if="aiExpanded" class="mobile-ai-mask mobile-only-block" @click="aiExpanded = false"></div>
 
         <!-- 标签云面板 (移动端隐藏，AI 展开时隐藏) -->
         <div class="tag-panel" 
@@ -198,7 +202,8 @@
                   :global-analysis-enabled="globalAnalysisEnabled"
                   :selected-categories="selectedCategoryPath"
                   @close="toggleAiPanel"
-                  @render-to-tagcloud="handleRenderAIResult" />
+                  @render-to-tagcloud="handleRenderAIResult"
+                  @render-pois-to-map="handleRenderPoisToMap" />
         </div>
       </section>
     </main>
@@ -218,7 +223,7 @@
 
 <script setup>
 import { ref, shallowRef, onMounted, nextTick, computed } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElNotification } from 'element-plus';
 import ControlPanel from './components/ControlPanel.vue';
 import TagCloud from './components/TagCloud.vue';
 import MapContainer from './components/MapContainer.vue';
@@ -332,7 +337,6 @@ if (aiExpanded.value) {
 
 // 叠加模式状态
 const activeGroups = ref([]); // [{ name: 'A', features: [] }, ...]
-const overlayEnabled = ref(false);
 const heatmapEnabled = ref(false); // 新增热力图同步状态
 
 // 权重渲染状态
@@ -468,30 +472,49 @@ const handleRunAlgorithm = (payload) => {
  */
 const handleDataLoaded = (payload) => {
   if (payload && payload.success && payload.features) {
-    const newGroup = { name: payload.name, features: payload.features };
+    // 构造新数据组
+    const newGroup = { 
+      name: payload.name, 
+      category: payload.category || payload.name, // 使用 category 作为唯一标识
+      features: payload.features 
+    };
     
-    if (!overlayEnabled.value) {
-      // 覆盖模式：替换所有
-      activeGroups.value = [newGroup];
+    // 始终采用叠加/追加模式
+    // 检查该类别是否已加载
+    const existsIndex = activeGroups.value.findIndex(g => g.category === newGroup.category);
+    
+    if (existsIndex >= 0) {
+      // 如果已存在，则更新数据（可能是重新加载）
+      activeGroups.value[existsIndex] = newGroup;
     } else {
-      // 叠加模式：追加
-      const exists = activeGroups.value.find(g => g.name === payload.name);
-      if (!exists) {
-        activeGroups.value.push(newGroup);
-      } else {
-        Object.assign(exists, newGroup);
-      }
+      // 否则追加新组
+      activeGroups.value.push(newGroup);
     }
     
     updateAllPoiFeatures();
     
     // 注意：这里只加载数据，不自动渲染红点
-    // 用户需要通过绘制选区来触发 POI 渲染
-    // 这符合原始设计：选择器选择类别 → 加载数据 → 绘制选区 → 渲染选区内 POI
-    
-    console.log(`[App] 数据已加载: 当前 ${activeGroups.value.length} 个分组，共 ${allPoiFeatures.value.length} 个 POI (未渲染，等待选区)`);
   }
 };
+
+/**
+ * 处理数据移除
+ * 当用户取消勾选某个分类时触发
+ * @param {string} categoryToRemove - 要移除的类别名称
+ */
+const handleDataRemoved = (categoryToRemove) => {
+  if (!categoryToRemove) return;
+  
+  const initialLength = activeGroups.value.length;
+  activeGroups.value = activeGroups.value.filter(g => g.category !== categoryToRemove);
+  
+  if (activeGroups.value.length < initialLength) {
+    updateAllPoiFeatures();
+    ElNotification.info({ title: '已移除', message: `移除图层: ${categoryToRemove}`, offset: 80 });
+  }
+};
+    
+
 
 /**
  * 更新所有 POI 特征，合并所有活动分组并分配颜色索引
@@ -511,14 +534,7 @@ function updateAllPoiFeatures() {
   // MapContainer 组件会自动监听 poiFeatures 变化并根据当前 geometry 重新筛选
 }
 
-const handleToggleOverlay = (val) => {
-  overlayEnabled.value = val;
-  if (!val && activeGroups.value.length > 1) {
-    // 如果关闭叠加，保留最后一个选中的
-    activeGroups.value = [activeGroups.value[activeGroups.value.length - 1]];
-    updateAllPoiFeatures();
-  }
-};
+
 
 /**
  * 处理权重变化事件
@@ -533,23 +549,23 @@ async function handleWeightChange(payload) {
   // 如果需要加载栅格
   if (payload.needLoad && payload.enabled) {
     if (!tagCloudRef.value) {
-      ElMessage.error('标签云组件未就绪');
+      ElNotification.error({ title: '错误', message: '标签云组件未就绪', offset: 80 });
       return;
     }
     
-    ElMessage.info('正在加载人口密度栅格数据...');
+    ElNotification.info({ title: '加载中', message: '正在加载人口密度栅格数据...', offset: 80 });
     
     try {
       const success = await tagCloudRef.value.loadRaster();
       if (success) {
-        ElMessage.success('人口密度栅格加载成功！权重渲染已启用');
+        ElNotification.success({ title: '成功', message: '人口密度栅格加载成功！权重渲染已启用', offset: 80 });
       } else {
-        ElMessage.error('栅格加载失败，请检查文件路径');
+        ElNotification.error({ title: '错误', message: '栅格加载失败，请检查文件路径', offset: 80 });
         weightEnabled.value = false;
       }
     } catch (error) {
       console.error('[App] 栅格加载失败:', error);
-      ElMessage.error('栅格加载失败');
+      ElNotification.error({ title: '错误', message: '栅格加载失败', offset: 80 });
       weightEnabled.value = false;
     }
   }
@@ -570,7 +586,7 @@ const handleSearch = async (keyword) => {
   }
   
   // 显示 loading 提示
-  ElMessage.info('正在搜索，请稍候...');
+  ElNotification.info({ title: '搜索中', message: '正在搜索，请稍候...', offset: 80 });
   
   try {
     // 构建空间上下文
@@ -590,7 +606,7 @@ const handleSearch = async (keyword) => {
     
     // 如果需要 AI 助手处理（复杂查询）
     if (result.needsAiAssistant) {
-      ElMessage.info('检测到复杂查询，正在启动 AI 助手...');
+      ElNotification.info({ title: 'AI 助手', message: '检测到复杂查询，正在启动 AI 助手...', offset: 80 });
       
       // 1. 展开 AI 面板
       if (!aiExpanded.value) {
@@ -623,16 +639,16 @@ const handleSearch = async (keyword) => {
       const expandInfo = result.expandedTerms?.length > 1 
         ? ` (同义词扩展: ${result.expandedTerms.slice(0, 3).join(', ')}...)` 
         : '';
-      ElMessage.success(`搜索完成，找到 ${filtered.length} 条相关信息！${expandInfo}`);
+      ElNotification.success({ title: '搜索完成', message: `搜索完成，找到 ${filtered.length} 条相关信息！${expandInfo}`, offset: 80 });
       // 通知子组件有搜索结果
       if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(true);
     } else {
-      ElMessage.warning(`未找到与「${keyword}」相关的 POI`);
+      ElNotification.warning({ title: '未找到结果', message: `未找到与「${keyword}」相关的 POI`, offset: 80 });
       if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
     }
   } catch (error) {
     console.error('[App] 搜索失败:', error);
-    ElMessage.error('搜索失败，请稍后重试');
+    ElNotification.error({ title: '错误', message: '搜索失败，请稍后重试', offset: 80 });
     if (controlPanelRefMap.value?.setSearchResult) controlPanelRefMap.value.setSearchResult(false);
   }
 };
@@ -645,8 +661,79 @@ const handleClearSearch = () => {
   if (mapComponent.value) {
     mapComponent.value.showHighlights(selectedFeatures.value, { fitView: true });
   }
-  ElMessage.info('已清除查询结果');
+  ElNotification.info({ title: '提示', message: '已清除查询结果', offset: 80 });
 };
+
+/**
+ * 处理 AI 标签云的"渲染至地图"事件
+ * @param {Array} pois - 从标签云传来的 POI 数组
+ */
+function handleRenderPoisToMap(pois) {
+  if (!pois || pois.length === 0) {
+    ElNotification.warning({ title: '提示', message: '没有可渲染的 POI 数据', offset: 80 });
+    return;
+  }
+  
+  console.log('[App] AI 标签云渲染 POI 到地图:', pois.length);
+  
+  // 将 POI 数据转换为 GeoJSON Feature 格式（如果需要）
+  const features = pois.map(poi => {
+    // 如果已经是 GeoJSON Feature 格式
+    if (poi.type === 'Feature' && poi.geometry) {
+      return poi;
+    }
+    
+    // 如果是后端返回的简化格式，转换为 GeoJSON
+    const lon = poi.lon || poi.longitude || poi.geometry?.coordinates?.[0];
+    const lat = poi.lat || poi.latitude || poi.geometry?.coordinates?.[1];
+    
+    if (!lon || !lat) {
+      console.warn('[App] POI 缺少坐标:', poi.name);
+      return null;
+    }
+    
+    return {
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [lon, lat]
+      },
+      properties: {
+        名称: poi.name || poi.名称 || '未知',
+        大类: poi.type || poi.大类 || '',
+        小类: poi.小类 || poi.category || '',
+        // 保留原始属性
+        ...poi.properties,
+        // 标记来源
+        _source: 'ai_tagcloud'
+      }
+    };
+  }).filter(Boolean);
+  
+  if (features.length === 0) {
+    ElNotification.warning({ title: '提示', message: 'POI 数据格式无效', offset: 80 });
+    return;
+  }
+  
+  // 更新标签云数据
+  tagData.value = features;
+  
+  // 渲染到地图并自适应视野
+  if (mapComponent.value) {
+    mapComponent.value.showHighlights(features, { fitView: true });
+  }
+  
+  // 通知子组件有搜索结果
+  if (controlPanelRefMap.value?.setSearchResult) {
+    controlPanelRefMap.value.setSearchResult(true);
+  }
+  
+  ElNotification.success({ 
+    title: '渲染成功', 
+    message: `已将 ${features.length} 个 POI 渲染到地图`, 
+    offset: 80 
+  });
+}
 
 /**
  * 保存筛选结果为 CSV 文件
@@ -685,7 +772,7 @@ function handleSaveResult() {
   }
   
   if (!features || features.length === 0) {
-    ElMessage.warning('没有可保存的筛选结果');
+    ElNotification.warning({ title: '提示', message: '没有可保存的筛选结果', offset: 80 });
     return;
   }
   
@@ -714,7 +801,7 @@ function handleSaveResult() {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
   
-  ElMessage.success(`已保存 ${features.length} 条 POI 数据 (${dataSource})`);
+  ElNotification.success({ title: '保存成功', message: `已保存 ${features.length} 条 POI 数据 (${dataSource})`, offset: 80 });
 }
 
 /**
@@ -841,9 +928,9 @@ const handlePolygonCompleted = (payload) => {
   }
   
   if (!inside.length) {
-    ElMessage.warning('该区域内没有任何信息！');
+    ElNotification.success({ title: '区域已锁定', message: '已应用选区，可以筛选POI和向GeoAI助手提问啦~', offset: 80 });
   } else {
-    ElMessage.success(`已选中 ${inside.length} 个POI，点击"渲染标签云"按钮进行渲染`);
+    ElNotification.success({ title: '绘制完成', message: `已选中 ${inside.length} 个POI，点击"渲染标签云"按钮进行渲染`, offset: 80 });
   }
 };
 
@@ -861,7 +948,7 @@ const handleMapReady = (mapInstance) => {
  */
 function handleDebugShow(groupName) {
   if (!allPoiFeatures.value.length) {
-    ElMessage.warning('请先加载地理语义分组数据');
+    ElNotification.warning({ title: '提示', message: '请先加载地理语义分组数据', offset: 80 });
     return;
   }
   console.log('[App] 调试显示所有要素');
@@ -878,7 +965,7 @@ function handleVectorPolygonUploaded(feature) {
   console.log('[App] 收到上传的矢量面要素:', feature);
   
   if (!feature || !feature.geometry) {
-    ElMessage.error('无效的面要素');
+    ElNotification.error({ title: '错误', message: '无效的面要素', offset: 80 });
     return;
   }
   
@@ -891,7 +978,7 @@ function handleVectorPolygonUploaded(feature) {
   } else if (geomType === 'MultiPolygon') {
     coordinates = feature.geometry.coordinates[0][0]; // 取第一个多边形的外环
   } else {
-    ElMessage.error('不支持的几何类型: ' + geomType);
+    ElNotification.error({ title: '错误', message: '不支持的几何类型: ' + geomType, offset: 80 });
     return;
   }
   
@@ -900,9 +987,10 @@ function handleVectorPolygonUploaded(feature) {
   // 所以这里不需要再手动计算筛选结果
   if (mapComponent.value && mapComponent.value.addUploadedPolygon) {
     mapComponent.value.addUploadedPolygon(coordinates);
-    ElMessage.success('已应用选区，正在筛选...');
+    // 移除重复提示
+    // ElNotification.success({ title: '成功', message: '已应用选区，正在筛选...', offset: 80 });
   } else {
-    ElMessage.warning('地图组件未就绪');
+    ElNotification.warning({ title: '提示', message: '地图组件未就绪', offset: 80 });
   }
 }
 
@@ -928,7 +1016,7 @@ function handleRenderAIResult(data) {
     );
     
     if (featuresToRender.length === 0) {
-      ElMessage.warning('未在当前数据中找到匹配的 POI');
+      ElNotification.warning({ title: '提示', message: '未在当前数据中找到匹配的 POI', offset: 80 });
       return;
     }
   }
@@ -952,7 +1040,7 @@ function handleRenderAIResult(data) {
     });
   }
   
-  ElMessage.success(`已将 ${featuresToRender.length} 个结果渲染到标签云`);
+  ElNotification.success({ title: '渲染完成', message: `已将 ${featuresToRender.length} 个结果渲染到标签云`, offset: 80 });
 }
 
 
@@ -989,19 +1077,13 @@ function handleReset() {
   }
   
   console.log('[App] 已重置所有数据');
-  ElMessage.success('已清空所有数据');
+  ElNotification.success({ title: '重置完成', message: '已清空所有数据', offset: 80 });
 }
 </script>
 
 <style>
 /* ElMessage 定位到右上角 header 下方 */
-.el-message {
-  /* 强制显示在 header (68px) 下方，右侧 */
-  top: 80px !important;
-  left: auto !important;
-  right: 40px !important;
-  transform: translateX(0) !important;
-}
+
 
 html, body, #app {
   height: 100vh;

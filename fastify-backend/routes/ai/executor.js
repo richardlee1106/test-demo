@@ -2,7 +2,7 @@
  * 阶段 2: Executor (执行器)
  * 
  * 职责：
- * - 根据 QueryPlan 调用 PostGIS / Milvus / 图数据库
+ * - 根据 QueryPlan 调用 PostGIS / Pgvector / 图数据库
  * - 完成空间过滤、聚合统计、语义精排
  * - 返回压缩后的结果 JSON（供 Writer 使用）
  * - 绝不调用 LLM
@@ -18,12 +18,24 @@ import { generateEmbedding } from '../../services/llm.js'
  * 执行器配置
  */
 const EXECUTOR_CONFIG = {
-  maxCandidates: 200,       // 普通搜索最大候选数
-  maxAnalysisCandidates: 10000, // 聚合分析最大候选数 (三通道之大数据通道)
-  maxResults: 30,           // 最终返回给 Writer 的最大 POI 数
-  maxLandmarks: 5,          // 最大代表性地标数
-  defaultRadius: 1000,      // 默认搜索半径（米）
-  h3Resolution: 9           // H3 索引精度 (Res 9 边长约为 174m)
+  maxCandidates: 500,         // 普通搜索最大候选数
+  maxAnalysisCandidates: 100000, // 聚合分析最大候选数 (放开限制，全域分析)
+  maxResults: 50,             // 最终返回给 Writer 的最大 POI 数
+  maxLandmarks: 8,            // 最大代表性地标数
+  defaultRadius: 2000,        // 默认搜索半径（米）
+  h3Resolution: 9,            // H3 索引精度 (Res 9 边长约为 174m)
+  
+  // 代表性地标评分权重 (用于计算 POI 的地标价值)
+  landmarkWeights: {
+    // 高代表性类型 (用户会用来定位的地标)
+    high: ['地铁站', '火车站', '机场', '大学', '三甲医院', '大型商场', '知名景点', '政府机关', '体育馆', '博物馆', '图书馆', '标志性建筑','知名商业街','知名地标'],
+    // 中等代表性
+    medium: ['中学', '小学', '医院', '超市', '购物中心', '公园', '广场', '银行总行', '酒店', '影院'],
+    // 低代表性 (通常不作为地标)
+    low: ['便利店', '餐厅', '咖啡厅', '药店', '银行网点', '停车场'],
+    // 排除类型 (永远不应作为代表性地标)
+    exclude: ['公共厕所', '厕所', '卫生间', '垃圾站', '配电房', '泵站', '宿舍', '教职工宿舍', '学生寝室', '学生公寓', '员工宿舍', '职工宿舍', '体育场', '操场', '篮球场', '羽毛球场', '网球场', '足球场', '跑道', '仓库', '杂物间', '设备间', '机房']
+  }
 }
 
 /**
@@ -370,8 +382,8 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   // 注意：这里使用更大的 maxAnalysisCandidates
   let candidates = []
   
-  // 构建空间上下文
-  const spatialContext = options.spatialContext || {}
+  // 构建空间上下文（兼容 options.context 和 options.spatialContext）
+  const spatialContext = options.spatialContext || options.context || {}
   let hardBoundaryWKT = null
   let searchCenter = null
   
@@ -380,6 +392,8 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
     searchCenter = getPolygonCenter(spatialContext.boundary)
   } else if (spatialContext.center) {
     searchCenter = spatialContext.center
+  } else if (spatialContext.viewportCenter) { // 兼容 context.viewportCenter
+    searchCenter = spatialContext.viewportCenter
   } else if (spatialContext.viewport) {
     searchCenter = { 
       lon: (spatialContext.viewport[0] + spatialContext.viewport[2]) / 2, 
@@ -409,12 +423,68 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
     limit: EXECUTOR_CONFIG.maxAnalysisCandidates 
   }
   
-  if (hardBoundaryWKT) {
-    candidates = await searchFromDatabase(searchCenter, plan.radius_m, searchPlan, hardBoundaryWKT)
-  } else if (searchCenter) {
-    candidates = await searchFromDatabase(searchCenter, plan.radius_m || 2000, searchPlan)
-  } else if (frontendPOIs.length > 0) {
-    candidates = filterFromFrontendPOIs(frontendPOIs, plan)
+  // 关键优化：判断是否为专题分析（指定了特定 categories）
+  const isTopicAnalysis = plan.categories && plan.categories.length > 0
+  
+  if (isTopicAnalysis) {
+    // 专题分析：优先从数据库检索特定类别的 POI
+    // 即使有前端数据，也要从数据库获取，因为前端可能没有加载这些类别
+    console.log(`[Executor] 专题分析模式，检索类别: ${plan.categories.join(', ')}`)
+    
+    if (hardBoundaryWKT) {
+      candidates = await searchFromDatabase(searchCenter, plan.radius_m || 5000, searchPlan, hardBoundaryWKT)
+    } else if (searchCenter) {
+      let effectiveRadius = plan.radius_m || 5000
+      
+      // 关键优化：如果用户看的是"当前区域"（未指定具体地名锚点），
+      // 且有 Viewport 信息，则限制半径不超过 Viewport 的范围，防止搜到屏幕外很远的点
+      if ((!plan.anchor || plan.anchor.type === 'unknown') && spatialContext.viewport) {
+         // viewport: [minLon, minLat, maxLon, maxLat]
+         // 计算对角线长度的一半作为参考半径
+         const dist = calculateDistance(spatialContext.viewport[1], spatialContext.viewport[0], spatialContext.viewport[3], spatialContext.viewport[2])
+         const viewportRadius = dist / 2
+         
+         if (viewportRadius < effectiveRadius) {
+             effectiveRadius = viewportRadius
+             console.log(`[Executor] 动态收缩搜索半径至 Viewport 范围: ${Math.round(effectiveRadius)}m`)
+         }
+      }
+      
+      candidates = await searchFromDatabase(searchCenter, effectiveRadius, searchPlan)
+    } else if (options.hardBoundary?.length > 0) {
+      // 使用手绘边界的质心作为搜索中心
+      const polygonCenter = getPolygonCenter(options.hardBoundary[0])
+      candidates = await searchFromDatabase(polygonCenter, plan.radius_m || 5000, searchPlan)
+    } else if (frontendPOIs.length > 0) {
+      // 从前端数据的质心位置搜索数据库
+      const coords = frontendPOIs
+        .map(p => [p.geometry?.coordinates?.[0], p.geometry?.coordinates?.[1]])
+        .filter(c => c[0] && c[1])
+      
+      if (coords.length > 0) {
+        const centerLon = coords.reduce((s, c) => s + c[0], 0) / coords.length
+        const centerLat = coords.reduce((s, c) => s + c[1], 0) / coords.length
+        candidates = await searchFromDatabase({ lon: centerLon, lat: centerLat }, plan.radius_m || 5000, searchPlan)
+      } else {
+        // 兜底：尝试从前端数据过滤
+        candidates = filterFromFrontendPOIs(frontendPOIs, plan)
+      }
+    }
+    
+    // 如果数据库没有结果，尝试从前端数据过滤
+    if (candidates.length === 0 && frontendPOIs.length > 0) {
+      console.log('[Executor] 数据库无结果，降级从前端数据过滤')
+      candidates = filterFromFrontendPOIs(frontendPOIs, plan)
+    }
+  } else {
+    // 全域分析：使用原来的逻辑
+    if (hardBoundaryWKT) {
+      candidates = await searchFromDatabase(searchCenter, plan.radius_m, searchPlan, hardBoundaryWKT)
+    } else if (searchCenter) {
+      candidates = await searchFromDatabase(searchCenter, plan.radius_m || 2000, searchPlan)
+    } else if (frontendPOIs.length > 0) {
+      candidates = filterFromFrontendPOIs(frontendPOIs, plan)
+    }
   }
 
   result.stats.total_candidates = candidates.length
@@ -428,6 +498,45 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   let representativePOIs = []
   if (plan.sampling_strategy?.enable) {
     representativePOIs = selectRepresentativePOIs(candidates, aggregationResult, plan.sampling_strategy)
+    
+    // 关键增强：如果存在 semantic_query，使用 pgvector 找出语义最相关的 POI，并补充到 representativePOIs 中
+    // 这能解决规则筛选无法覆盖"抽象意图"（如"好玩的"、"适合约会的"）的问题
+    if (plan.semantic_query && vectordb.isVectorDBAvailable() && candidates.length > 0) {
+        console.log(`[Executor] 聚合模式触发语义增强检索: "${plan.semantic_query}"`)
+        const semanticTopK = await semanticRerank(candidates, plan.semantic_query, 10)
+        
+        if (semanticTopK.length > 0) {
+            // 将语义相关的点合并，优先展示
+            const existingIds = new Set(representativePOIs.map(p => p.id || p.poiid || p.name))
+            let addedCount = 0
+            
+            // 关键：语义检索回来的点也要经过黑名单过滤！
+            const filteredSemantic = semanticTopK.filter(poi => {
+                const name = poi.name || poi.properties?.['名称'] || ''
+                const cat = poi.type || poi.properties?.['大类'] || poi.properties?.['小类'] || ''
+                // 复用黑名单检查逻辑 (如果 score === 0 说明命中了黑名单)
+                return calculateLandmarkScore(name, cat) > 0
+            })
+            
+            // 逆序插入到头部
+            for (let i = filteredSemantic.length - 1; i >= 0; i--) {
+                const poi = filteredSemantic[i]
+                const id = poi.id || poi.poiid || poi.name
+                if (!existingIds.has(id)) {
+                    representativePOIs.unshift(poi) 
+                    existingIds.add(id)
+                    addedCount++
+                }
+            }
+            console.log(`[Executor] 语义增强：补充了 ${addedCount} 个相关点 (已过滤黑名单)`)
+            
+            // 重新截断，但稍微放宽数量限制以容纳语义点
+            const maxCount = (plan.sampling_strategy.count || 20)
+            if (representativePOIs.length > maxCount) {
+                representativePOIs = representativePOIs.slice(0, maxCount)
+            }
+        }
+    }
   } else {
     // 如果没开启采样，默认选 Top N
     representativePOIs = candidates.slice(0, 20)
@@ -486,8 +595,9 @@ function performH3Aggregation(pois, res) {
         const cell = gridMap.get(h3Idx)
         cell.count++
         
-        // 类别统计
-        const cat = poi.category || poi.properties?.['小类'] || poi.properties?.['大类'] || '其他'
+        // 类别统计 - 优先使用大类，避免出现"其他"
+        const props = poi.properties || poi
+        const cat = props['大类'] || props.category_big || props['中类'] || props['小类'] || props.type || '未分类'
         cell.categories[cat] = (cell.categories[cat] || 0) + 1
         
         // 记录一个代表名 (简单的逻辑：第一个遇到的)
@@ -532,42 +642,409 @@ function performH3Aggregation(pois, res) {
 }
 
 /**
- * 选代表点
+ * 代表性 POI 筛选 (新版三维评分方案)
+ * 
+ * 核心理念：
+ * - 高代表性：景点、交通枢纽、核心政府机构 → 优先选入
+ * - 常见业态：美食、银行、医院、酒店 → 业态统计，只选1-2个代表
+ * - 精细化排除：非大众熟知的行政机构、附属设施
+ * 
+ * 综合得分: Score = 0.3 * Spatial + 0.4 * Functional + 0.3 * Semantic
  */
-function selectRepresentativePOIs(allPois, aggResult, strategy) {
-  // 简单策略：从 Top 5 的高密网格里各选 2 个，再从整体里按评分选 10 个
-  const selected = []
+
+// =============== 黑名单配置（硬排除） ===============
+// 这些词出现在名称中的 POI 永远不会成为代表点
+const REPRESENTATIVE_BLACKLIST = {
+  // 附属设施 - 从属于主体的设施
+  auxiliary: ['出入口', '入口', '出口', '收费处', '婴儿换洗间', '母婴室', '卫生间', '洗手间', '厕所', '公共厕所', '充电桩', '门卫室', '保安室', '配电房', '泵站', '垃圾站', '仓库', '杂物间', '设备间', '机房', '街电', '充电宝', '共享充电', '回收箱', '旧衣回收', '丰巢', '快递柜', '自提柜', '菜鸟驿站', '自助', '专用', '内部', '警用', '员工', '泊位', '车位', '停车', '充电', '休息', '小屋', '吸烟'],
+  
+  // 住宿/生活配套 - 不具公共地标价值
+  residential: ['宿舍', '教职工宿舍', '学生寝室', '学生公寓', '员工宿舍', '职工宿舍', '家属院', '职工家属区', '垃圾房', '单元', '栋', '室', 'B区', 'A区', 'C区', 'D区', '号楼'],
+  
+  // 营销/临时设施
+  sales: ['营销中心', '展示中心', '接待中心', '售楼部', '售楼处', '样板间', '项目部', '项目处', '指挥部', '办公室', '报名处'],
+  
+  // 金融/彩票类 - 过于普遍，无区域代表性
+  commonFinance: ['ATM', '自助银行', '自助取款', '彩票', '体育彩票', '福利彩票', '投注站', '兑奖中心'],
+  
+  // 运动场地 - 通常是配套而非地标
+  sports: ['操场', '篮球场', '羽毛球场', '网球场', '足球场', '跑道', '田径场', '乒乓球'],
+  
+  // 临街门/后门 - 不是独立地标
+  gates: ['北门', '南门', '东门', '西门', '后门', '侧门', '正门', '临街院门', '大门', '消防通道'],
+  
+  // 纯道路/地理名称
+  pureGeo: ['交叉口', '路口', '十字路口', '丁字路口', '环岛'],
+  
+  // 非大众熟知的行政机构（关键词组合排除）
+  // 注意：这些是"模式"，会在后续用特殊逻辑处理
+  obscureAdmin: ['监察总队', '监察队', '办事处', '管理站', '管理处', '服务站', '服务中心', '供销社', '信用社']
+}
+
+// 将所有黑名单合并为一个扁平数组
+const BLACKLIST_ALL = Object.values(REPRESENTATIVE_BLACKLIST).flat()
+
+// =============== 高代表性 POI 类型 ===============
+// 这些类型的 POI 有天然的地标属性，优先选入
+const HIGH_REPRESENTATIVE_TYPES = {
+  // 景点类 - 优先级最高
+  attractions: ['博物馆', '纪念馆', '展览馆', '科技馆', '海洋馆', '水族馆', '植物园', '动物园', '公园', '景区', '风景区', '名胜', '古迹', '遗址', '故居', '寺庙', '塔', '城墙', '古镇', '历史街区','知名商业街','知名地标','知名景点'],
+  
+  // 交通枢纽
+  transport: ['火车站', '高铁站', '机场', '汽车站', '客运站', '地铁站', '轻轨站', '码头', '港口'],
+  
+  // 核心政府机构 (大众熟知的)
+  coreGov: ['人民政府', '市政府', '省政府', '区政府', '县政府', '市委', '省委', '区委', '人大常委会', '政协'],
+  
+  // 大型公共设施
+  publicFacility: ['体育馆', '体育中心', '奥体中心', '图书馆', '文化馆', '艺术馆', '音乐厅', '大剧院', '歌剧院', '会展中心', '国际会议中心','交流中心']
+}
+
+// =============== 常见业态（业态统计，只选1-2个代表） ===============
+const COMMON_BUSINESS_TYPES = {
+  food: ['餐厅', '饭店', '酒楼', '美食', '小吃', '火锅', '烧烤', '快餐', '面馆', '粉店'],
+  hotel: ['酒店', '宾馆', '旅馆', '民宿', '客栈', '招待所'],
+  bank: ['银行', '信用社', '农商行', '邮政储蓄'],
+  hospital: ['医院', '诊所', '卫生院', '门诊部', '社区卫生'],
+  parking: ['停车场', '停车库', '车库'],
+  company: ['公司', '有限公司', '集团', '总部', '分公司']
+}
+
+// =============== 语义加分/减分关键词 ===============
+const SEMANTIC_KEYWORDS = {
+  // 加分词 - 像一个真正的地标/设施
+  positive: ['广场', '购物中心', '商场', '美食城', '步行街', '商业街', '大厦', '中心', '总部', '旗舰店'],
+  
+  // 减分词 - 容易是附属设施或同质化严重
+  negative: ['分店', '分院', '分行', '支行', '网点', '营业厅', '营业部', '代理点', '直营店', '专卖店', '便利店', '超市', '药店', '诊所'],
+  
+  // 知名连锁品牌 - 有辨识度（可作为业态代表）
+  brands: ['星巴克', '肯德基', '麦当劳', '必胜客', '海底捞', '西贝', '喜茶', '奈雪', '瑞幸', '万达', '万科', '华润', '中信', '招商', '保利', '宜家', '苹果', '小米', '华为']
+}
+/**
+ * 主入口：选取代表性 POI (最终版)
+ * 
+ * 选取逻辑（优先级从高到低）：
+/**
+ * 筛选代表性 POI (主流程)
+ */
+function selectRepresentativePOIs(allPois, aggResult, strategy, regionCenter = null) {
+  // 根据策略动态决定目标数量，默认为 50 (支持标签云粗略聚合)
+  const TARGET_COUNT = Math.min(strategy?.count || 50, 50)
+  
+  if (!allPois || allPois.length === 0) return []
+  if (allPois.length <= TARGET_COUNT) return allPois
+  
   const seenIds = new Set()
+  const seenNames = new Set()
+  const selected = []
   
-  // 1. 密度代表 (Diversity by Density)
-  const topGrids = aggResult.grids.slice(0, 5)
-  // 这里简化处理，实际上需要反查。为了性能，我们遍历 allPois 重新匹配一下，或者优化数据结构
-  // 由于我们没在 grid 里存 poi list，这里用最简单的 global logic:
+  console.log(`[RepPOI] 开始筛选，目标: ${TARGET_COUNT}，原始候选: ${allPois.length}`)
   
-  // 暂时用全局 Top Rating + Random Mixed
-  const sortedByRating = [...allPois].sort((a,b) => (b.rating||0) - (a.rating||0))
+  // ========== 第 0 步：强力黑名单过滤 ==========
+  const candidatePool = allPois.filter(poi => {
+    const props = poi.properties || poi
+    const name = props['名称'] || props.name || ''
+    const cat = `${props['大类'] || ''} ${props['中类'] || ''} ${props['小类'] || ''} ${poi.category || ''}`
+    
+    // 1. 检查名称黑名单
+    for (const blackWord of BLACKLIST_ALL) {
+      if (name.includes(blackWord)) return false
+    }
+    
+    // 2. 检查类别黑名单（补充排除充电宝、维修点等）
+    const auxiliaryWords = REPRESENTATIVE_BLACKLIST.auxiliary
+    if (auxiliaryWords.some(word => cat.includes(word))) return false
+    
+    // 3. 过滤掉不知名公司/有限公司（非知名品牌且分值不高）
+    // 特别修正：即使包含知名品牌(如万达)，如果带有"营销中心"、"租赁"等词，也要过滤
+    if (name.includes('公司') || name.includes('有限') || name.includes('租赁')) {
+        const isFamous = SEMANTIC_KEYWORDS.brands.some(b => name.includes(b))
+        // 如果包含“营销中心”等，直接杀，不管是不是名牌
+        if (REPRESENTATIVE_BLACKLIST.sales.some(s => name.includes(s))) return false
+        
+        if (!isFamous && (poi.score < 4 || !poi.score)) return false
+    }
+    
+    // 4. 营销中心补漏 (针对不含“公司”名字的)
+    if (REPRESENTATIVE_BLACKLIST.sales.some(s => name.includes(s))) return false
+
+    return true
+  })
   
-  // 选前 10 高分
-  sortedByRating.slice(0, 10).forEach(p => {
-    const id = p.id || p.poiid
-    if (!seenIds.has(id)) {
-      selected.push(p); seenIds.add(id)
+  console.log(`[RepPOI] 强力过滤后剩余: ${candidatePool.length} 条`)
+  
+  if (candidatePool.length === 0) {
+    console.warn('[RepPOI] 警告: 黑名单过滤后无候选')
+    return []
+  }
+  
+  // ========== 分类候选池 ==========
+  const highPriorityPois = []     // 高代表性：景点、交通枢纽、核心政府
+  const commonBusinessPois = {}   // 常见业态：美食、银行、医院等（按类型分组）
+  const otherPois = []            // 其他
+  
+  // 初始化常见业态分组
+  Object.keys(COMMON_BUSINESS_TYPES).forEach(type => {
+    commonBusinessPois[type] = []
+  })
+  
+  candidatePool.forEach(poi => {
+    const props = poi.properties || poi
+    const name = props['名称'] || props.name || ''
+    const fullText = `${name} ${props['大类'] || ''} ${props['中类'] || ''} ${props['小类'] || ''}`
+    
+    // 检查是否为高代表性类型
+    let isHighPriority = false
+    for (const typeGroup of Object.values(HIGH_REPRESENTATIVE_TYPES)) {
+      for (const typeWord of typeGroup) {
+        if (fullText.includes(typeWord)) {
+          highPriorityPois.push(poi)
+          isHighPriority = true
+          break
+        }
+      }
+      if (isHighPriority) break
+    }
+    
+    if (isHighPriority) return
+    
+    // 检查是否为常见业态
+    let isCommonBusiness = false
+    for (const [bizType, keywords] of Object.entries(COMMON_BUSINESS_TYPES)) {
+      for (const kw of keywords) {
+        if (fullText.includes(kw)) {
+          commonBusinessPois[bizType].push(poi)
+          isCommonBusiness = true
+          break
+        }
+      }
+      if (isCommonBusiness) break
+    }
+    
+    if (!isCommonBusiness) {
+      otherPois.push(poi)
     }
   })
   
-  // 随机再补 10 个以增加多样性
-  let attempts = 0
-  while(selected.length < (strategy.count || 20) && attempts < 100 && allPois.length > 0) {
-    const p = allPois[Math.floor(Math.random() * allPois.length)]
-    if (!p) { attempts++; continue; }
-    const id = p.id || p.poiid
-    if (!seenIds.has(id)) {
-      selected.push(p); seenIds.add(id)
-    }
-    attempts++
+  console.log(`[RepPOI] 分类结果: 高代表性=${highPriorityPois.length}, 常见业态=${Object.values(commonBusinessPois).flat().length}, 其他=${otherPois.length}`)
+  
+  // ========== 辅助函数：添加 POI 到结果 ==========
+  const addToSelected = (poi) => {
+    const props = poi.properties || poi
+    const name = props['名称'] || props.name || ''
+    const id = poi.id || poi.poiid || name
+    
+    if (seenIds.has(id) || seenNames.has(name)) return false
+    
+    seenIds.add(id)
+    seenNames.add(name)
+    selected.push(poi)
+    return true
   }
   
+  // ========== 第 1 步：优先选高代表性 POI（最多 6 个）==========
+  const highPriorityLimit = 6
+  
+  // 对高代表性 POI 按名称辨识度排序
+  highPriorityPois.sort((a, b) => {
+    const nameA = a.properties?.['名称'] || a['名称'] || a.name || ''
+    const nameB = b.properties?.['名称'] || b['名称'] || b.name || ''
+    
+    // 景点优先
+    const scoreA = computeHighPriorityScore(nameA)
+    const scoreB = computeHighPriorityScore(nameB)
+    return scoreB - scoreA
+  })
+  
+  for (const poi of highPriorityPois) {
+    if (selected.length >= highPriorityLimit) break
+    addToSelected(poi)
+  }
+  
+  console.log(`[RepPOI] 高代表性选取: ${selected.length} 个`)
+  
+  // ========== 第 2 步：每种常见业态选 1 个代表 ==========
+  const commonBizLimit = 1  // 每类选 1 个
+  
+  for (const [bizType, pois] of Object.entries(commonBusinessPois)) {
+    if (selected.length >= TARGET_COUNT) break
+    if (pois.length === 0) continue
+    
+    // 优先选知名品牌
+    let bestPoi = null
+    for (const poi of pois) {
+      const name = poi.properties?.['名称'] || poi['名称'] || poi.name || ''
+      
+      // 检查是否为知名品牌
+      for (const brand of SEMANTIC_KEYWORDS.brands) {
+        if (name.includes(brand)) {
+          bestPoi = poi
+          break
+        }
+      }
+      if (bestPoi) break
+    }
+    
+    // 如果没有知名品牌，选名称最短的（通常更简洁的名字更有辨识度）
+    if (!bestPoi && pois.length > 0) {
+      pois.sort((a, b) => {
+        const nameA = a.properties?.['名称'] || a['名称'] || a.name || ''
+        const nameB = b.properties?.['名称'] || b['名称'] || b.name || ''
+        return nameA.length - nameB.length
+      })
+      bestPoi = pois[0]
+    }
+    
+    if (bestPoi) {
+      addToSelected(bestPoi)
+    }
+  }
+  
+  console.log(`[RepPOI] 常见业态代表选取后: ${selected.length} 个`)
+  
+  // ========== 第 3 步：强力补齐（如果有空位）==========
+  // 如果前两步选完还不够 TARGET_COUNT，从整个 candidatePool 中按评分补齐
+  if (selected.length < TARGET_COUNT) {
+    const remainingNeed = TARGET_COUNT - selected.length
+    console.log(`[RepPOI] 仍需补齐: ${remainingNeed} 个，从剩余候选池中挑选...`)
+    
+    // 对剩余候选池按分数排序
+    const remainingCandidates = candidatePool.filter(p => {
+       const props = p.properties || p
+       const name = props['名称'] || props.name || ''
+       const id = p.id || p.poiid || name
+       return !seenIds.has(id) && !seenNames.has(name)
+    })
+    
+    // 按综合语义分排序
+    remainingCandidates.sort((a, b) => {
+        const nameA = a.properties?.['名称'] || a.name || ''
+        const nameB = b.properties?.['名称'] || b.name || ''
+        // 注意：computeSemanticScore 是下面定义的函数，假设可用。如果没有，用 calculateLandmarkScore
+        const scoreA = (a.score || 0) + calculateLandmarkScore(nameA, a.type || '')
+        const scoreB = (b.score || 0) + calculateLandmarkScore(nameB, b.type || '')
+        return scoreB - scoreA
+    })
+    
+    for (const poi of remainingCandidates) {
+        if (selected.length >= TARGET_COUNT) break
+        addToSelected(poi)
+    }
+  }
+
+  // 最终排序：景点优先，其次按分数
+  selected.sort((a, b) => {
+     const nameA = a.properties?.['名称'] || a.name || ''
+     const nameB = b.properties?.['名称'] || b.name || ''
+     const isAttrA = HIGH_REPRESENTATIVE_TYPES.attractions.some(t => (a.type || '').includes(t) || nameA.includes(t))
+     const isAttrB = HIGH_REPRESENTATIVE_TYPES.attractions.some(t => (b.type || '').includes(t) || nameB.includes(t))
+     
+     if (isAttrA && !isAttrB) return -1
+     if (!isAttrA && isAttrB) return 1
+     return (b.score || 0) - (a.score || 0)
+  })
+  
+  console.log(`[RepPOI] 最终选取: ${selected.length} 个代表性 POI`)
+  
   return selected
+}
+
+/**
+ * 计算高代表性 POI 的优先级分数
+ */
+function computeHighPriorityScore(name) {
+  let score = 0
+  
+  // 景点类最高分
+  for (const word of HIGH_REPRESENTATIVE_TYPES.attractions) {
+    if (name.includes(word)) {
+      score += 100
+      break
+    }
+  }
+  
+  // 交通枢纽次之
+  for (const word of HIGH_REPRESENTATIVE_TYPES.transport) {
+    if (name.includes(word)) {
+      score += 80
+      break
+    }
+  }
+  
+  // 核心政府机构
+  for (const word of HIGH_REPRESENTATIVE_TYPES.coreGov) {
+    if (name.includes(word)) {
+      score += 70
+      break
+    }
+  }
+  
+  // 大型公共设施
+  for (const word of HIGH_REPRESENTATIVE_TYPES.publicFacility) {
+    if (name.includes(word)) {
+      score += 60
+      break
+    }
+  }
+  
+  return score
+}
+
+/**
+ * 计算语义评分（用于排序"其他"类 POI）
+ */
+function computeSemanticScore(name) {
+  let score = 50
+  
+  // 加分词
+  for (const word of SEMANTIC_KEYWORDS.positive) {
+    if (name.includes(word)) {
+      score += 30
+      break
+    }
+  }
+  
+  // 减分词
+  for (const word of SEMANTIC_KEYWORDS.negative) {
+    if (name.includes(word)) {
+      score -= 20
+      break
+    }
+  }
+  
+  // 品牌加分
+  for (const brand of SEMANTIC_KEYWORDS.brands) {
+    if (name.includes(brand)) {
+      score += 20
+      break
+    }
+  }
+  
+  // 名称长度惩罚
+  if (name.length < 3) score -= 15
+  if (name.length > 20) score -= 10
+  
+  return Math.max(0, score)
+}
+
+/**
+ * 计算类别统计
+ */
+function computeCategoryStats(pois) {
+  const stats = new Map()
+  
+  pois.forEach(poi => {
+    const props = poi.properties || poi
+    const cat = props['大类'] || props.category_big || props.type || '其他'
+    
+    if (!stats.has(cat)) {
+      stats.set(cat, { category: cat, count: 0 })
+    }
+    stats.get(cat).count++
+  })
+  
+  return Array.from(stats.values()).sort((a, b) => b.count - a.count)
 }
 
 function getPolygonCenter(ring) {
@@ -875,60 +1352,152 @@ async function computeAreaProfileFromDB(anchorOrWkt, radius) {
 }
 
 /**
- * 提取代表性地标
+ * 提取代表性地标 (智能版)
+ * 
+ * 核心逻辑：不仅匹配类型，还要评估 POI 是否具有"地标价值"
+ * - 排除明显不具备代表性的 POI（如公厕、宿舍、体育场）
+ * - 优先选择知名度高、辨识度强的地点
+ * - 考虑名称特征（包含"总"、"中心"、"大"等词通常更具代表性）
  */
 async function extractLandmarks(frontendPOIs, anchor, radius) {
-  const landmarkTypes = ['地铁站', '学校', '大学', '医院', '商场', '广场', '公园', '银行']
   const landmarks = []
+  const seenNames = new Set()
   
-  // 从前端 POI 中提取
-  for (const poi of frontendPOIs) {
+  // 计算每个 POI 的地标评分
+  const scoredPOIs = frontendPOIs.map(poi => {
     const props = poi.properties || poi
+    const name = props['名称'] || props.name || ''
     const category = `${props['大类'] || ''} ${props['中类'] || ''} ${props['小类'] || ''} ${props.type || ''}`
     
-    for (const type of landmarkTypes) {
-      if (category.includes(type)) {
-        // 计算距离（如果有锚点）
-        let distance_m = 0
-        if (anchor && poi.geometry?.coordinates) {
-          distance_m = calculateDistance(
-            anchor.lat, anchor.lon,
-            poi.geometry.coordinates[1], poi.geometry.coordinates[0]
-          )
-        }
-        
-        landmarks.push({
-          name: props['名称'] || props.name || '未命名',
-          type,
-          distance_m: Math.round(distance_m),
-          relevance_score: getLandmarkRelevanceScore(type)
-        })
-        break
-      }
+    const score = calculateLandmarkScore(name, category)
+    
+    // 计算距离（如果有锚点）
+    let distance_m = 0
+    if (anchor && poi.geometry?.coordinates) {
+      distance_m = calculateDistance(
+        anchor.lat, anchor.lon,
+        poi.geometry.coordinates[1], poi.geometry.coordinates[0]
+      )
     }
     
-    if (landmarks.length >= EXECUTOR_CONFIG.maxLandmarks) break
-  }
+    return {
+      poi,
+      name,
+      category,
+      score,
+      distance_m,
+      props
+    }
+  })
   
-  // 按相关性排序
-  return landmarks.sort((a, b) => b.relevance_score - a.relevance_score)
+  // 按评分排序，取 Top N
+  scoredPOIs
+    .filter(item => item.score > 0) // 排除得分为 0 的（被排除的类型）
+    .sort((a, b) => {
+      // 优先按评分，其次按距离
+      if (b.score !== a.score) return b.score - a.score
+      return a.distance_m - b.distance_m
+    })
+    .forEach(item => {
+      if (landmarks.length >= EXECUTOR_CONFIG.maxLandmarks) return
+      if (seenNames.has(item.name)) return // 去重
+      
+      seenNames.add(item.name)
+      landmarks.push({
+        name: item.name,
+        type: extractPrimaryType(item.category),
+        distance_m: Math.round(item.distance_m),
+        relevance_score: item.score,
+        category_detail: item.props['小类'] || item.props['中类'] || ''
+      })
+    })
+  
+  return landmarks
 }
 
 /**
- * 地标类型相关性打分
+ * 计算 POI 的地标价值评分
+ * 
+ * 评分维度：
+ * 1. 黑名单过滤 (BLACKLIST_ALL)
+ * 2. 语义加分词 / 减分词
+ * 3. 品牌辨识度
+ * 
+ * @returns {number} 0-100 的评分，0 表示应该排除
+ */
+function calculateLandmarkScore(name, category) {
+  const fullText = `${name} ${category}`
+  
+  // 1. 首先检查黑名单 - 如果命中则直接返回 0
+  for (const blackWord of BLACKLIST_ALL) {
+    if (name.includes(blackWord)) {
+      return 0 // 直接排除
+    }
+  }
+  
+  let score = 20 // 基础分
+  
+  // 2. 语义加分词 (像一个真正的地标)
+  for (const posWord of SEMANTIC_KEYWORDS.positive) {
+    if (name.includes(posWord)) {
+      score += 40
+      break
+    }
+  }
+  
+  // 3. 语义减分词 (附属设施或同质化)
+  for (const negWord of SEMANTIC_KEYWORDS.negative) {
+    if (name.includes(negWord)) {
+      score -= 20
+      break
+    }
+  }
+  
+  // 4. 知名品牌加分
+  for (const brand of SEMANTIC_KEYWORDS.brands) {
+    if (name.includes(brand)) {
+      score += 25
+      break
+    }
+  }
+  
+  // 5. 名称长度惩罚 (过短或过长)
+  if (name.length < 3) score -= 15
+  if (name.length > 20) score -= 10
+  
+  return Math.max(0, score) // 确保不为负数
+}
+
+/**
+ * 从完整类别字符串中提取主要类型
+ */
+function extractPrimaryType(category) {
+  const types = ['地铁站', '火车站', '机场', '大学', '中学', '小学', '医院', '商场', 
+                 '超市', '公园', '广场', '银行', '酒店', '影院', '体育馆', '博物馆', 
+                 '图书馆', '政府', '景点', '写字楼', '住宅区']
+  
+  for (const t of types) {
+    if (category.includes(t)) return t
+  }
+  
+  // 尝试提取小类
+  const parts = category.split(/\s+/).filter(Boolean)
+  return parts[parts.length - 1] || '其他'
+}
+
+/**
+ * 地标类型相关性打分 (保留用于兼容)
+ * @deprecated 使用 calculateLandmarkScore 替代
  */
 function getLandmarkRelevanceScore(type) {
-  const scores = {
-    '地铁站': 10,
-    '学校': 8,
-    '大学': 9,
-    '医院': 7,
-    '商场': 6,
-    '广场': 5,
-    '公园': 4,
-    '银行': 3
-  }
-  return scores[type] || 1
+  const { landmarkWeights } = EXECUTOR_CONFIG
+  
+  if (landmarkWeights.high.some(t => type.includes(t))) return 50
+  if (landmarkWeights.medium.some(t => type.includes(t))) return 30
+  if (landmarkWeights.low.some(t => type.includes(t))) return 10
+  if (landmarkWeights.exclude.some(t => type.includes(t))) return 0
+  
+  return 5 // 默认低分
 }
 
 /**
