@@ -1101,8 +1101,8 @@ html, body, #app {
 .app-layout {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  width: 100vw;
+  height: 100%; /* Strict height */
+  width: 100%;
   overflow: hidden;
   background: 
     radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
@@ -1566,7 +1566,10 @@ html, body, #app {
 
   .bottom-split {
     flex-direction: column;
-    height: 100vh;
+    height: 100%; /* Changed from 100vh to 100% to fill available parent space */
+    width: 100%;
+    position: relative;
+    overflow: hidden;
   }
   
   /* 移动端地图全屏 */

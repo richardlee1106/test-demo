@@ -88,6 +88,20 @@
         collapse-tags
       />
       <div class="mobile-btn-group">
+        <!-- AI 搜索按钮 (新位置: Selector [Search] [Save] [...]) -->
+        <button 
+          class="more-btn search-btn-mobile" 
+          :class="{ 'active': hasSearchResult }"
+          @click="handleMobileSemanticQuery"
+        >
+          <svg v-if="!hasSearchResult" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+          </svg>
+           <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+             <path d="M18 6 6 18M6 6l12 12"/>
+           </svg>
+        </button>
+
         <button class="save-btn" @click="handleSaveResultMobile">保存结果</button>
         <button class="more-btn" @click="toggleMobileMenu">
           <svg viewBox="0 0 24 24" width="24" height="24" fill="white">
@@ -106,17 +120,7 @@
         @click="showMobileMenu = false"
       >
         <div class="mobile-menu-content" @click.stop>
-        <div class="menu-item" @click="handleMobileSemanticQuery">
-          <div class="menu-item-icon">
-             <svg v-if="!hasSearchResult" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
-            </svg>
-            <svg v-else viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M18 6 6 18M6 6l12 12"/>
-            </svg>
-          </div>
-          <span>{{ hasSearchResult ? '清除查询' : '语义查询' }}</span>
-        </div>
+        <!-- 语义查询已移动到顶部栏 -->
         
         <div
           class="menu-item"
@@ -1601,6 +1605,40 @@ defineExpose({ setDrawEnabled, setSearchResult, setSearching });
   /* 按钮组固定在右侧 */
   .mobile-btn-group {
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px; /* 增加间距 */
+  }
+
+  .search-btn-mobile {
+    padding: 0 !important;
+    width: 32px !important;
+    height: 32px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #ffffff !important; /* 纯白背景 */
+    border: none !important;
+    border-radius: 4px !important;
+    color: #000000 !important; /* 黑色图标 */
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2) !important;
+    transition: all 0.2s ease;
+  }
+  
+  .search-btn-mobile:hover {
+    transform: translateY(-1px);
+    background: #f8fafc !important; /* 浅灰色背景 */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+  }
+  
+  .search-btn-mobile:active {
+    transform: translateY(0);
+    opacity: 0.8;
+  }
+  
+  /* 激活状态（如果有搜索结果）可以稍微加点边框或深色 */
+  .search-btn-mobile.active {
+    background: #e2e8f0 !important;
   }
 }
 /* 强制覆盖 el-cascader 面板样式以适应抽屉 */
