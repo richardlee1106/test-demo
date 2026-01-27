@@ -197,6 +197,106 @@ export async function semanticSearch(
 }
 
 /**
+ * 真正的空间-向量混合检索 (Fusion Search)
+ * 结合 PostGIS 空间索引和 pgvector 语义索引
+ * 
+ * Logic: WHERE ST_DWithin(...) AND category_match ORDER BY embedding <=> query LIMIT topK
+ */
+export async function spatialVectorSearch(options) {
+  const { 
+    queryEmbedding, 
+    anchor, 
+    radius, 
+    topK = 20, 
+    viewportWKT = null,
+    categories = []  // 新增：类别过滤
+  } = options;
+
+  if (!vectorTableReady) {
+    console.warn("pgvector 不可用，跳过混合检索");
+    return [];
+  }
+
+  const vectorStr = `[${queryEmbedding.join(",")}]`;
+
+  // 构建混合查询 SQL
+  // 注意：需要 JOIN pois 表和 poi_embeddings 表
+  let sql = `
+    SELECT 
+      p.id, 
+      p.name, 
+      p.address,
+      p.category_big, 
+      p.category_mid, 
+      p.category_small,
+      ST_X(p.geom) AS lon, 
+      ST_Y(p.geom) AS lat,
+      (1 - (e.embedding <=> $1::vector)) AS semantic_score,
+      ST_Distance(p.geom::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography) AS distance_m
+    FROM pois p
+    JOIN poi_embeddings e ON p.id = e.poi_id
+    WHERE ST_DWithin(p.geom::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)
+  `;
+  
+  const params = [vectorStr, anchor.lon, anchor.lat, radius];
+  let paramIndex = 5;
+
+  // 添加类别过滤条件
+  if (categories && categories.length > 0) {
+    // 使用 ILIKE 进行宽松匹配（支持"咖啡"匹配"咖啡厅"、"星巴克咖啡"等）
+    const categoryConditions = categories.map((_, i) => {
+      const idx = paramIndex + i;
+      return `(p.category_big ILIKE $${idx} OR p.category_mid ILIKE $${idx} OR p.category_small ILIKE $${idx} OR p.name ILIKE $${idx})`;
+    });
+    sql += ` AND (${categoryConditions.join(' OR ')})`;
+    categories.forEach(cat => {
+      params.push(`%${cat}%`);
+    });
+    paramIndex += categories.length;
+    console.log(`[VectorDB] 类别过滤已启用: ${categories.join(', ')}`);
+  }
+
+  if (viewportWKT) {
+    sql += ` AND ST_Within(p.geom, ST_GeomFromText($${paramIndex}, 4326))`;
+    params.push(viewportWKT);
+    paramIndex++;
+  }
+
+  // 按语义相似度降序排列 (优先)，其次按距离
+  sql += ` ORDER BY e.embedding <=> $1::vector ASC, distance_m ASC LIMIT $${paramIndex}`;
+  params.push(topK);
+
+  try {
+    const startTime = Date.now();
+    const result = await query(sql, params);
+    
+    console.log(`[VectorDB] 混合检索完成: ${result.rows.length} 结果, 耗时 ${Date.now() - startTime}ms`);
+    
+    return result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      category: row.category_small || row.category_mid || row.category_big,
+      lon: row.lon,
+      lat: row.lat,
+      distance_m: row.distance_m,
+      semantic_score: parseFloat(row.semantic_score),
+      // 兼容字段
+      properties: {
+        id: row.id,
+        name: row.name,
+        address: row.address,
+        '小类': row.category_small,
+        '中类': row.category_mid
+      }
+    }));
+  } catch (err) {
+    console.error('[VectorDB] 混合检索失败:', err.message);
+    return [];
+  }
+}
+
+/**
  * 混合搜索：先空间过滤，再语义排序
  * @param {Array} spatialCandidates 空间过滤后的候选 POI
  * @param {string} semanticQuery 语义查询文本
@@ -286,6 +386,7 @@ export default {
   insertEmbedding,
   batchInsertEmbeddings,
   semanticSearch,
+  spatialVectorSearch,
   hybridSearch,
   clearVectorDB,
   closeVectorDB,

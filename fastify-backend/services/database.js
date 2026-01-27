@@ -626,15 +626,15 @@ export async function findPOIsFiltered(options) {
     paramIndex++;
   }
   
-  // 类别过滤
+  // 类别过滤 (Phase 1 修复：同时匹配名称，与 QuickSearch 保持一致)
   if (categories.length > 0) {
      const categoryConditions = categories.map((_, i) => {
       const idx = paramIndex + i;
-      // 这里的逻辑是：用户选的类别可能是 中类，也可能是 小类
-      // 所以我们要把用户输入的值，同时去匹配数据库里的 category_mid 和 category_small
-      // 甚至 type 字段（为了兼容旧数据）
+      // 修复：同时匹配 name (名称)、category 字段和 type
+      // 这与 QuickSearch 的行为一致，避免遗漏名称中包含关键词的 POI
       return `(
-        p.category_small ILIKE $${idx} 
+        p.name ILIKE $${idx}
+        OR p.category_small ILIKE $${idx} 
         OR p.category_mid ILIKE $${idx} 
         OR p.type ILIKE $${idx}
       )`;
@@ -662,8 +662,8 @@ export async function findPOIsFiltered(options) {
   params.push(limit);
   
   try {
-    // console.log('[DB SQL]', sql); // Debug logging
-    // console.log('[DB Params]', params); 
+    console.log('[DB SQL Debug]', sql);
+    console.log('[DB Params Debug]', params); 
     const result = await query(sql, params);
     
     if (result.rows.length === 0 && categories.length > 0) {
@@ -768,6 +768,125 @@ export async function quickSearch(options) {
   }
 }
 
+/**
+ * 两阶段空间过滤查询（用于 "X附近的Y" 类型查询）
+ * 
+ * 阶段1: 在视野范围内按关键词/类别初筛
+ * 阶段2: 通过地标缓冲区精筛
+ * 
+ * @param {Object} options
+ *   @param {string[]} terms - 搜索关键词 (如 ["火锅", "涮锅"])
+ *   @param {string} viewportWKT - 视野边界 WKT (阶段1使用)
+ *   @param {Object} anchor - 地标坐标 {lon, lat} (阶段2使用)
+ *   @param {number} bufferRadius - 缓冲区半径（米，默认 2000）
+ *   @param {number} limit - 返回数量限制
+ * @returns {Promise<Object>} { stage1Count, stage2Count, pois }
+ */
+export async function findPOIsTwoStageFilter(options) {
+  const { 
+    terms = [], 
+    viewportWKT, 
+    anchor, 
+    bufferRadius = 2000, 
+    limit = 100 
+  } = options;
+  
+  if ((!terms || terms.length === 0) && !anchor && !viewportWKT) {
+    console.log('[DB TwoStage] 无搜索词且无空间条件，跳过');
+    return { stage1Count: 0, stage2Count: 0, pois: [] };
+  }
+  
+  const startTime = Date.now();
+  
+  // =============================================
+  // 阶段1: 视野范围 + 关键词初筛
+  // =============================================
+  let stage1SQL = `
+    SELECT 
+      p.id, p.name, p.address,
+      p.category_big, p.category_mid, p.category_small,
+      ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat
+  `;
+  
+  const params = [];
+  let paramIndex = 1;
+
+  // 如果有锚点，计算到锚点的距离
+  if (anchor) {
+    stage1SQL += `, ST_Distance(p.geom::geography, ST_SetSRID(ST_MakePoint($${paramIndex}, $${paramIndex + 1}), 4326)::geography) AS distance_m`;
+    params.push(anchor.lon, anchor.lat);
+    paramIndex += 2;
+  } else {
+    stage1SQL += `, 0 AS distance_m`;
+  }
+  
+  stage1SQL += ` FROM pois p WHERE `;
+  
+  // 关键词匹配条件（名称 + 类别）
+  if (terms && terms.length > 0) {
+    const termConditions = terms.map((_, i) => {
+      const idx = paramIndex + i;
+      return `(
+        p.name ILIKE $${idx} OR 
+        p.category_small ILIKE $${idx} OR 
+        p.category_mid ILIKE $${idx} OR
+        p.type ILIKE $${idx}
+      )`;
+    });
+    stage1SQL += `(${termConditions.join(' OR ')})`;
+    terms.forEach(t => params.push(`%${t}%`));
+    paramIndex += terms.length;
+  } else {
+    stage1SQL += `1=1`; // 无关键词时匹配所有
+  }
+  
+  // 视野范围过滤（阶段1）
+  if (viewportWKT) {
+    stage1SQL += ` AND ST_Within(p.geom, ST_GeomFromText($${paramIndex}, 4326))`;
+    params.push(viewportWKT);
+    paramIndex++;
+  }
+  
+  // =============================================
+  // 阶段2: 地标缓冲区精筛
+  // =============================================
+  if (anchor) {
+    stage1SQL += ` AND ST_DWithin(p.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $${paramIndex})`;
+    params.push(bufferRadius);
+    paramIndex++;
+  }
+  
+  // 排序和限制
+  if (anchor) {
+    stage1SQL += ` ORDER BY distance_m ASC`;
+  } else {
+    stage1SQL += ` ORDER BY p.name ASC`;
+  }
+  stage1SQL += ` LIMIT $${paramIndex}`;
+  params.push(limit);
+  
+  try {
+    console.log('[DB TwoStage] 执行两阶段查询...');
+    console.log('[DB TwoStage] 关键词:', terms);
+    console.log('[DB TwoStage] 锚点:', anchor ? `${anchor.lon.toFixed(4)}, ${anchor.lat.toFixed(4)}` : '无');
+    console.log('[DB TwoStage] 缓冲区半径:', bufferRadius, 'm');
+    
+    const result = await query(stage1SQL, params);
+    
+    const duration = Date.now() - startTime;
+    console.log(`[DB TwoStage] 完成: ${result.rows.length} 条结果, 耗时 ${duration}ms`);
+    
+    return {
+      stage1Count: result.rows.length, // TODO: 可以分开统计
+      stage2Count: result.rows.length,
+      pois: result.rows
+    };
+  } catch (err) {
+    console.error('[DB TwoStage] 查询失败:', err.message);
+    return { stage1Count: 0, stage2Count: 0, pois: [] };
+  }
+}
+
 export default {
   initDatabase,
   getPool,
@@ -781,5 +900,6 @@ export default {
   getCategoryStatsByGeometry,
   getRepresentativeLandmarks,
   findPOIsFiltered,
-  quickSearch
+  quickSearch,
+  findPOIsTwoStageFilter
 };

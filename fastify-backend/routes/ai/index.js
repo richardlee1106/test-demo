@@ -137,6 +137,14 @@ async function aiRoutes(fastify, options) {
         architecture: 'three-stage'
       })
 
+      // 调试：确认 spatialContext 是否正确传递
+      console.log('[AI Chat] 📍 收到 spatialContext:', JSON.stringify({
+        received: !!options.spatialContext,
+        mode: options.spatialContext?.mode,
+        hasViewport: !!(options.spatialContext?.viewport?.length),
+        viewport: options.spatialContext?.viewport
+      }))
+
       // 获取当前服务商信息
       const { getActiveProviderInfo } = await import('../../services/llm.js')
       const providerInfo = await getActiveProviderInfo()

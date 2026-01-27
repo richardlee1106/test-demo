@@ -23,7 +23,19 @@ const EXECUTOR_CONFIG = {
   maxResults: 50,             // 最终返回给 Writer 的最大 POI 数
   maxLandmarks: 8,            // 最大代表性地标数
   defaultRadius: 2000,        // 默认搜索半径（米）
-  h3Resolution: 9,            // H3 索引精度 (Res 9 边长约为 174m)
+  h3Resolution: 9,            // H3 索引精度 (Res 9 边长约为 174m) - 默认值
+  
+  // H3 分辨率对照表 (Phase 1 优化：动态分辨率)
+  // Res 7: ~1.2km 边长 - 城市级
+  // Res 8: ~460m 边长 - 片区级
+  // Res 9: ~174m 边长 - 社区级  
+  // Res 10: ~66m 边长 - 街区级
+  h3ResolutionTable: {
+    city: 7,      // > 5km
+    district: 8,  // 2-5km
+    community: 9, // 500m-2km
+    block: 10     // < 500m
+  },
   
   // 代表性地标评分权重 (用于计算 POI 的地标价值)
   landmarkWeights: {
@@ -35,6 +47,62 @@ const EXECUTOR_CONFIG = {
     low: ['便利店', '餐厅', '咖啡厅', '药店', '银行网点', '停车场'],
     // 排除类型 (永远不应作为代表性地标)
     exclude: ['公共厕所', '厕所', '卫生间', '垃圾站', '配电房', '泵站', '宿舍', '教职工宿舍', '学生寝室', '学生公寓', '员工宿舍', '职工宿舍', '体育场', '操场', '篮球场', '羽毛球场', '网球场', '足球场', '跑道', '仓库', '杂物间', '设备间', '机房']
+  }
+}
+
+/**
+ * Phase 1 优化：动态选择 H3 分辨率
+ * 
+ * 根据查询范围大小自动选择合适的 H3 分辨率，
+ * 使得聚合粒度与分析需求匹配。
+ * 
+ * @param {Object} queryPlan - QueryPlan 对象
+ * @param {Object} spatialContext - 空间上下文（可选）
+ * @returns {number} H3 分辨率 (7-10)
+ */
+function selectH3Resolution(queryPlan, spatialContext = null) {
+  // 1. 优先使用 QueryPlan 中指定的分辨率
+  if (queryPlan.aggregation_strategy?.resolution) {
+    return queryPlan.aggregation_strategy.resolution
+  }
+  
+  // 2. 根据查询半径动态选择
+  const radius = queryPlan.radius_m || EXECUTOR_CONFIG.defaultRadius
+  
+  if (radius > 5000) {
+    // 城市级：> 5km
+    console.log(`[Executor] 动态 H3 分辨率: 7 (城市级，半径 ${radius}m)`)
+    return 7
+  } else if (radius > 2000) {
+    // 片区级：2-5km
+    console.log(`[Executor] 动态 H3 分辨率: 8 (片区级，半径 ${radius}m)`)
+    return 8
+  } else if (radius > 500) {
+    // 社区级：500m-2km
+    console.log(`[Executor] 动态 H3 分辨率: 9 (社区级，半径 ${radius}m)`)
+    return 9
+  } else {
+    // 街区级：< 500m
+    console.log(`[Executor] 动态 H3 分辨率: 10 (街区级，半径 ${radius}m)`)
+    return 10
+  }
+}
+
+/**
+ * 根据 H3 分辨率计算合理的最大网格数
+ * 
+ * @param {number} resolution - H3 分辨率
+ * @returns {number} 建议的最大网格数
+ */
+function getMaxBinsForResolution(resolution) {
+  // 低分辨率（大网格）需要更少的 bins
+  // 高分辨率（小网格）可以有更多的 bins
+  switch (resolution) {
+    case 7: return 30   // 城市级：粗略聚合
+    case 8: return 50   // 片区级
+    case 9: return 60   // 社区级：默认
+    case 10: return 80  // 街区级：精细聚合
+    default: return 50
   }
 }
 
@@ -117,15 +185,33 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
   let hardBoundaryWKT = null
   const spatialContext = options.spatialContext
   
+  // 调试：输出前端传递的空间上下文
+  console.log('[Executor] 📍 spatialContext 收到:', JSON.stringify({
+    hasContext: !!spatialContext,
+    mode: spatialContext?.mode,
+    hasBoundary: !!(spatialContext?.boundary?.length),
+    hasCenter: !!spatialContext?.center,
+    hasViewport: !!(spatialContext?.viewport?.length),
+    viewport: spatialContext?.viewport
+  }))
+  
   if (spatialContext) {
-    if (spatialContext.boundary && spatialContext.mode === 'Polygon') {
+    // 修复：更健壮的边界检测
+    if (spatialContext.boundary && spatialContext.boundary.length >= 3 && 
+        (spatialContext.mode === 'Polygon' || spatialContext.mode === 'polygon' || !spatialContext.mode)) {
       hardBoundaryWKT = pointsToWKT(spatialContext.boundary)
-    } else if (spatialContext.center && spatialContext.mode === 'Circle') {
-      // 如果是圆选区，后端构建一个搜索圆（或者简单转为矩形 WKT）
+      console.log('[Executor] 使用多边形边界 (Polygon WKT)')
+    } else if (spatialContext.center && 
+               (spatialContext.mode === 'Circle' || spatialContext.mode === 'circle')) {
+      // 如果是圆选区，后端构建一个搜索圆
       hardBoundaryWKT = circleToWKT(spatialContext.center, plan.radius_m || 500)
-    } else if (spatialContext.viewport && Array.isArray(spatialContext.viewport)) {
+      console.log('[Executor] 使用圆形边界 (Circle WKT)')
+    } else if (spatialContext.viewport && Array.isArray(spatialContext.viewport) && spatialContext.viewport.length >= 4) {
       // 如果没画选区，但有视野范围，将视野作为硬边界
       hardBoundaryWKT = bboxToWKT(spatialContext.viewport)
+      console.log('[Executor] 使用视野边界 (Viewport WKT):', spatialContext.viewport)
+    } else {
+      console.log('[Executor] ⚠️ spatialContext 存在但无法构建 WKT 边界')
     }
     
     // Store WKT in result for downstream use (e.g. global context)
@@ -201,34 +287,58 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     }
   }
   
-  // 1. 解析锚点
+  // 1. 先计算视野中心（用于锚点解析时的距离偏好）
+  let viewCenter = null
+  if (spatialContext?.viewport && spatialContext.viewport.length >= 4) {
+    viewCenter = {
+      lon: (spatialContext.viewport[0] + spatialContext.viewport[2]) / 2,
+      lat: (spatialContext.viewport[1] + spatialContext.viewport[3]) / 2
+    }
+  } else if (spatialContext?.center) {
+    viewCenter = spatialContext.center
+  }
+  
+  // 2. 解析锚点（增强：支持 unknown 类型，并传入视野中心用于距离偏好）
   let anchorCoords = null
-  if (plan.anchor?.type === 'landmark' && plan.anchor?.name) {
-    const anchorName = plan.anchor.gate 
-      ? `${plan.anchor.name}${plan.anchor.gate}` 
-      : plan.anchor.name
+  const anchorName = plan.anchor?.name
+  
+  // 情况1: 明确的地标类型
+  if (plan.anchor?.type === 'landmark' && anchorName) {
+    const fullName = plan.anchor.gate 
+      ? `${anchorName}${plan.anchor.gate}` 
+      : anchorName
     
-    anchorCoords = await resolveAnchor(anchorName)
+    // 传入视野中心，优先匹配靠近视野的同名 POI
+    anchorCoords = await resolveAnchor(fullName, null, viewCenter)
     if (anchorCoords) {
+      result.anchor = {
+        name: fullName,
+        lon: anchorCoords.lon,
+        lat: anchorCoords.lat,
+        resolved_from: anchorCoords.source || 'geocoder'
+      }
+    }
+  } 
+  // 情况2: unknown 类型但有名称（如"湖北大学"），尝试解析
+  else if (plan.anchor?.type === 'unknown' && anchorName) {
+    console.log(`[Executor] 尝试解析 unknown 类型锚点: "${anchorName}"`)
+    anchorCoords = await resolveAnchor(anchorName, null, viewCenter)
+    if (anchorCoords) {
+      console.log(`[Executor] ✅ 成功解析锚点 "${anchorName}" → ${anchorCoords.lon.toFixed(4)}, ${anchorCoords.lat.toFixed(4)}`)
       result.anchor = {
         name: anchorName,
         lon: anchorCoords.lon,
         lat: anchorCoords.lat,
         resolved_from: anchorCoords.source || 'geocoder'
       }
+    } else {
+      console.log(`[Executor] ⚠️ 无法解析锚点 "${anchorName}"，将使用视野中心`)
     }
   }
   
-  // 1.5 提取空间指纹 (Spatial Fingerprint)
+  // 1.5 提取空间指纹 (Spatial Fingerprint) - viewCenter 已在上方计算
   let geoSignature = null
-  let viewCenter = null
-  
-  if (spatialContext) {
-    viewCenter = spatialContext.center || (spatialContext.viewport ? { 
-      lon: (spatialContext.viewport[0] + spatialContext.viewport[2]) / 2, 
-      lat: (spatialContext.viewport[1] + spatialContext.viewport[3]) / 2 
-    } : null)
-  }
+  // (viewCenter 已在锚点解析前计算，此处复用)
 
   // 如果解析到了视野中心，且没有地名锚点，将其作为参考锚点
   if (viewCenter && !anchorCoords) {
@@ -289,7 +399,122 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
     // 强制进入数据库检索流程 (全域感知生效)
     console.log('[Executor] >>> 触发全库检索逻辑 (全域感知生效)')
     
-    if (hardBoundaryWKT) {
+    // =============================================
+    // 两阶段过滤路径：视野 + 地标 + 类别 同时存在
+    // =============================================
+    const hasTwoStageConditions = hardBoundaryWKT && anchorCoords && plan.categories?.length > 0
+    
+    if (hasTwoStageConditions) {
+      // 检测锚点是否在视野范围内
+      const viewport = spatialContext?.viewport
+      let anchorInViewport = true
+      
+      if (viewport && viewport.length >= 4) {
+        const [minLon, minLat, maxLon, maxLat] = viewport
+        anchorInViewport = (
+          anchorCoords.lon >= minLon && anchorCoords.lon <= maxLon &&
+          anchorCoords.lat >= minLat && anchorCoords.lat <= maxLat
+        )
+      }
+      
+      if (anchorInViewport) {
+        // 锚点在视野内：使用两阶段过滤（视野 + 锚点缓冲区）
+        console.log(`[Executor] 🎯 启用两阶段过滤: 视野初筛 + 地标缓冲区(${radius}m)精筛`)
+        
+        let usedHybrid = false
+        // 尝试混合检索 (Spatial + Vector)
+        if (vectordb.isVectorDBAvailable() && plan.semantic_query) {
+           console.log(`[Executor] 🚀 尝试混合检索 (Spatial+Vector) 已启用...`)
+           const embedding = await generateEmbedding(plan.semantic_query)
+           if (embedding) {
+             candidates = await vectordb.spatialVectorSearch({
+                queryEmbedding: embedding,
+                anchor: anchorCoords,
+                radius: radius,
+                viewportWKT: hardBoundaryWKT,
+                categories: plan.categories || [],  // 传递类别过滤
+                topK: EXECUTOR_CONFIG.maxCandidates
+             })
+             if (candidates.length > 0) {
+                usedHybrid = true
+                result.stats.semantic_rerank_applied = true
+                console.log(`[Executor] 混合检索成功: ${candidates.length} 条结果`)
+             }
+           }
+        }
+        
+        // 如果混合检索未启用或无结果，降级到关键词匹配
+        if (!usedHybrid) {
+            const twoStageResult = await db.findPOIsTwoStageFilter({
+              terms: plan.categories,
+              viewportWKT: hardBoundaryWKT,
+              anchor: anchorCoords,
+              bufferRadius: radius,
+              limit: EXECUTOR_CONFIG.maxCandidates
+            })
+            
+            candidates = twoStageResult.pois
+            result.stats.two_stage_filter = {
+              enabled: true,
+              anchor_in_viewport: true,
+              stage1_count: twoStageResult.stage1Count,
+              stage2_count: twoStageResult.stage2Count
+            }
+        }
+        
+        console.log(`[Executor] 两阶段过滤结果: ${candidates.length} 条`)
+      } else {
+        // 锚点在视野外：跳过视野约束，只用锚点缓冲区搜索
+        console.log(`[Executor] ⚠️ 锚点 "${plan.anchor?.name}" 不在视野内，跳过视野约束，仅用锚点缓冲区`)
+        console.log(`[Executor] 🎯 单阶段过滤: 地标缓冲区(${radius}m)`)
+        
+        let usedHybrid = false
+        // 尝试混合检索 (Spatial + Vector)
+        if (vectordb.isVectorDBAvailable() && plan.semantic_query) {
+           console.log(`[Executor] 🚀 尝试混合检索 (Spatial+Vector) 已启用...`)
+           const embedding = await generateEmbedding(plan.semantic_query)
+           if (embedding) {
+             candidates = await vectordb.spatialVectorSearch({
+                queryEmbedding: embedding,
+                anchor: anchorCoords,
+                radius: radius,
+                viewportWKT: null, // 不限制视野
+                categories: plan.categories || [],  // 传递类别过滤
+                topK: EXECUTOR_CONFIG.maxCandidates
+             })
+             if (candidates.length > 0) {
+                usedHybrid = true
+                result.stats.semantic_rerank_applied = true
+                console.log(`[Executor] 混合检索成功: ${candidates.length} 条结果`)
+             }
+           }
+        }
+        
+        if (!usedHybrid) {
+            const twoStageResult = await db.findPOIsTwoStageFilter({
+              terms: plan.categories,
+              viewportWKT: null,  // 不限制视野
+              anchor: anchorCoords,
+              bufferRadius: radius,
+              limit: EXECUTOR_CONFIG.maxCandidates
+            })
+            
+            candidates = twoStageResult.pois
+            result.stats.two_stage_filter = {
+              enabled: true,
+              anchor_in_viewport: false,
+              stage1_count: twoStageResult.stage1Count,
+              stage2_count: twoStageResult.stage2Count
+            }
+        }
+        
+        console.log(`[Executor] 锚点缓冲区过滤结果: ${candidates.length} 条`)
+      }
+    }
+    // =============================================
+    // 原有路径：单阶段过滤
+    // =============================================
+    else if (hardBoundaryWKT) {
       console.log(`[Executor] 执行 WKT 几何过滤检索...`)
       candidates = await searchFromDatabase(effectiveAnchor, radius, plan, hardBoundaryWKT)
     } else if (effectiveAnchor) {
@@ -330,13 +555,21 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
   
   result.stats.total_candidates = candidates.length
   
-  // 3. 语义精排（如果有语义偏好且 Milvus 可用）
+  // 3. 语义精排（如果有语义偏好且 pgvector 可用）
   let ranked = candidates
-  if (plan.semantic_query && vectordb.isVectorDBAvailable() && candidates.length > 0) {
+  const vectorAvailable = vectordb.isVectorDBAvailable()
+  
+  console.log(`[Executor] pgvector 状态检查: 可用=${vectorAvailable}, semantic_query="${plan.semantic_query?.slice(0, 30) || '(无)'}", candidates=${candidates.length}`)
+  
+  if (plan.semantic_query && vectorAvailable && candidates.length > 0) {
+    console.log(`[Executor] 🧠 启用语义精排 (pgvector)...`)
     ranked = await semanticRerank(candidates, plan.semantic_query, plan.max_results)
     result.stats.semantic_rerank_applied = true
   } else {
     // 按距离或评分排序
+    if (!vectorAvailable) {
+      console.log(`[Executor] ⚠️ pgvector 不可用，跳过语义精排`)
+    }
     ranked = sortCandidates(candidates, plan.sort_by)
   }
   
@@ -490,8 +723,9 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   result.stats.total_candidates = candidates.length
   console.log(`[Executor] 聚合分析获取候选集: ${candidates.length} 条`)
 
-  // 2. 执行 H3 空间聚合
-  const h3Resolution = plan.aggregation_strategy?.resolution || EXECUTOR_CONFIG.h3Resolution
+  // 2. 执行 H3 空间聚合 (Phase 1 优化：动态分辨率)
+  const h3Resolution = selectH3Resolution(plan)
+  const maxBins = getMaxBinsForResolution(h3Resolution)
   const aggregationResult = performH3Aggregation(candidates, h3Resolution)
   
   // 3. 执行代表点采样
@@ -549,7 +783,7 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   result.spatial_analysis = {
     resolution: h3Resolution,
     total_grids: aggregationResult.grids.length,
-    grids: aggregationResult.grids.slice(0, plan.aggregation_strategy?.max_bins || 50), // 只给 Writer 看 Top N 网格
+    grids: aggregationResult.grids.slice(0, maxBins), // Phase 1: 使用动态计算的 maxBins
     search_radius: plan.radius_m,
     coverage_ratio: candidates.length > 0 ? 1.0 : 0 // 简化
   }
@@ -1056,26 +1290,188 @@ function getPolygonCenter(ring) {
 
 
 /**
- * 图推理模式：路径/连通性分析
+ * 图推理模式：空间拓扑分析
  * 
- * 注意：图数据库暂未实现，此为占位逻辑
+ * 利用 H3 网格构建空间图，执行：
+ * - PageRank: 识别区域核心枢纽
+ * - 介数中心性: 识别桥梁连接节点  
+ * - 社区检测: 发现业态协同区
+ * 
+ * 综合评分公式: FinalScore = α*Spatial + β*Functional + γ*Semantic + δ*GraphCentrality
  */
 async function execGraphMode(plan, frontendPOIs, options = {}) {
-  console.log('[Executor] 图推理模式暂未实现，降级为区域画像模式')
+  console.log('[Executor] 进入图推理模式')
   
-  // 降级为区域画像模式
-  const result = await execGlobalContextMode(
-    { ...plan, need_graph_reasoning: false },
-    frontendPOIs,
-    options
-  )
-  
-  result.mode = 'graph'
-  result.graph_result = {
-    paths: [],
-    message: '图数据库功能开发中'
+  const result = {
+    mode: 'graph_analysis',
+    anchor: null,
+    pois: [],
+    area_profile: null,
+    landmarks: [],
+    graph_analysis: null, // 图分析结果
+    stats: {
+      total_candidates: 0,
+      filtered_count: 0,
+      graph_reasoning_applied: true
+    }
   }
+
+  // 1. 首先执行聚合分析获取候选数据
+  const aggregatedResult = await execAggregatedAnalysisMode(plan, frontendPOIs, options)
   
+  // 复制基础结果
+  result.anchor = aggregatedResult.anchor
+  result.area_profile = aggregatedResult.area_profile
+  result.landmarks = aggregatedResult.landmarks
+  result.stats.total_candidates = aggregatedResult.stats?.total_candidates || 0
+  
+  // 2. 动态导入图服务（避免循环依赖）
+  let graphService
+  try {
+    graphService = await import('../../services/graph.js')
+  } catch (err) {
+    console.error('[Executor] 图服务导入失败:', err.message)
+    // 降级返回聚合结果
+    result.mode = 'aggregated_analysis_fallback'
+    result.pois = aggregatedResult.pois
+    result.graph_analysis = { error: '图服务不可用' }
+    return result
+  }
+
+  // 3. 收集用于图分析的 POI 数据
+  // 优先使用数据库检索的原始候选集，如果没有则用前端数据
+  let poisForGraph = []
+  
+  const spatialContext = options.spatialContext || options.context || {}
+  let searchCenter = null
+  
+  if (spatialContext.center) {
+    searchCenter = spatialContext.center
+  } else if (spatialContext.viewport) {
+    searchCenter = {
+      lon: (spatialContext.viewport[0] + spatialContext.viewport[2]) / 2,
+      lat: (spatialContext.viewport[1] + spatialContext.viewport[3]) / 2
+    }
+  } else if (result.anchor) {
+    searchCenter = { lon: result.anchor.lon, lat: result.anchor.lat }
+  }
+
+  // 从数据库获取更多 POI 用于图分析
+  if (searchCenter) {
+    const graphSearchPlan = { 
+      ...plan, 
+      categories: [], // 全类目以便分析网络结构
+      limit: 2000     // 图分析需要更多数据点
+    }
+    
+    let hardBoundaryWKT = null
+    if (spatialContext.boundary && spatialContext.mode === 'Polygon') {
+      hardBoundaryWKT = pointsToWKT(spatialContext.boundary)
+    } else if (spatialContext.viewport) {
+      hardBoundaryWKT = bboxToWKT(spatialContext.viewport)
+    }
+    
+    try {
+      poisForGraph = await searchFromDatabase(
+        searchCenter, 
+        plan.radius_m || 3000, 
+        graphSearchPlan, 
+        hardBoundaryWKT
+      )
+      console.log(`[Executor] 图分析数据检索: ${poisForGraph.length} 条`)
+    } catch (err) {
+      console.warn('[Executor] 图分析数据检索失败:', err.message)
+    }
+  }
+
+  // 兜底使用前端数据
+  if (poisForGraph.length < 10 && Array.isArray(frontendPOIs) && frontendPOIs.length > 0) {
+    poisForGraph = frontendPOIs
+    console.log(`[Executor] 使用前端数据进行图分析: ${poisForGraph.length} 条`)
+  }
+
+  // 4. 执行图推理
+  if (poisForGraph.length >= 5) {
+    const graphResult = graphService.analyzeGraph(poisForGraph, {
+      resolution: plan.aggregation_strategy?.resolution || 9
+    })
+
+    if (graphResult.success) {
+      result.graph_analysis = graphResult.graph_analysis
+      result.stats.graph_node_count = graphResult.stats?.node_count
+      result.stats.graph_edge_count = graphResult.stats?.edge_count
+      result.stats.graph_duration_ms = graphResult.stats?.duration_ms
+
+      // 5. 基于图分析结果增强 POI 选择
+      // 优先选择位于枢纽区域的 POI
+      const hubH3Indices = new Set(
+        (graphResult.graph_analysis.hubs || []).map(h => h.h3Index)
+      )
+      const bridgeH3Indices = new Set(
+        (graphResult.graph_analysis.bridges || []).map(b => b.h3Index)
+      )
+
+      // 为每个候选 POI 计算图加权分数
+      const enhancedPOIs = aggregatedResult.pois.map(poi => {
+        const lat = poi.lat || (poi.geometry?.coordinates ? poi.geometry.coordinates[1] : null)
+        const lon = poi.lon || (poi.geometry?.coordinates ? poi.geometry.coordinates[0] : null)
+        
+        let graphBonus = 0
+        if (lat != null && lon != null) {
+          try {
+            const poiH3 = h3.latLngToCell(lat, lon, plan.aggregation_strategy?.resolution || 9)
+            if (hubH3Indices.has(poiH3)) {
+              graphBonus = 0.3 // 枢纽区域加分
+              poi.graph_role = 'hub'
+            } else if (bridgeH3Indices.has(poiH3)) {
+              graphBonus = 0.2 // 桥梁区域加分
+              poi.graph_role = 'bridge'
+            }
+          } catch (e) {
+            // 忽略 H3 错误
+          }
+        }
+        
+        poi.graph_bonus = graphBonus
+        poi.enhanced_score = (poi.score || 0.5) + graphBonus
+        return poi
+      })
+
+      // 按增强分数重排序
+      enhancedPOIs.sort((a, b) => (b.enhanced_score || 0) - (a.enhanced_score || 0))
+      
+      result.pois = compressPOIs(
+        enhancedPOIs.slice(0, plan.sampling_strategy?.count || 20),
+        result.anchor?.name
+      )
+
+      // 为枢纽 POI 添加标记
+      result.pois.forEach(poi => {
+        if (poi.graph_role) {
+          poi.tags = poi.tags || []
+          if (poi.graph_role === 'hub') {
+            poi.tags.push('区域枢纽')
+          } else if (poi.graph_role === 'bridge') {
+            poi.tags.push('连接节点')
+          }
+        }
+      })
+
+      console.log(`[Executor] 图推理增强完成: ${result.pois.length} POIs, ` +
+                  `${graphResult.graph_analysis.hubs?.length || 0} 枢纽, ` +
+                  `${graphResult.graph_analysis.communities?.length || 0} 社区`)
+    } else {
+      console.warn('[Executor] 图推理失败:', graphResult.error)
+      result.pois = aggregatedResult.pois
+      result.graph_analysis = { error: graphResult.error }
+    }
+  } else {
+    console.log('[Executor] POI 数量不足，跳过图推理')
+    result.pois = aggregatedResult.pois
+    result.graph_analysis = { error: 'POI 数量不足（需要至少 5 个）' }
+  }
+
+  result.stats.filtered_count = result.pois.length
   return result
 }
 

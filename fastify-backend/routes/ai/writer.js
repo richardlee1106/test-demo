@@ -45,6 +45,12 @@ const WRITER_SYSTEM_PROMPT = `你是「GeoLoom-RAG 空间认知助手」，一�
 - 该区域的核心功能是什么？
 - 该区域适合什么人群？
 
+### 5. 空间网络结构解读（如有图分析数据）
+- **枢纽识别**：哪些区域是"核心节点"？它们为什么重要？（POI 密度高、连接度强）
+- **桥梁作用**：哪些区域起到"连接不同功能区"的作用？
+- **社区划分**：区域是否形成了明显的"功能区块"？各区块的主导业态是什么？
+- **网络拓扑洞察**：用通俗语言解释图分析结果，如"A点在区域网络中起到枢纽作用，串联了X、Y两个功能区"
+
 ## 回答规范
 1. **先直接回答核心问题**（2-3句话概括）
 2. **分点陈述分析结论**（使用 ### 标题分节）
@@ -165,7 +171,55 @@ function buildResultContext(executorResult) {
   }
   // 纯区域分析模式下不显示 POI 列表，只展示区域画像
   
-  // 5. 执行统计（简化）
+  // 5. 图结构分析 (Graph Analysis)
+  if (results.graph_analysis && !results.graph_analysis.error) {
+    const ga = results.graph_analysis
+    let graphText = '🔗 **空间网络结构分析**:\n\n'
+    
+    // 全局统计
+    if (ga.global) {
+      graphText += `> 覆盖 ${ga.global.totalGrids} 个空间单元，形成 ${ga.global.totalConnections} 个连接关系，平均连通度 ${ga.global.avgConnectivity}\n\n`
+    }
+    
+    // 枢纽节点
+    if (ga.hubs?.length > 0) {
+      graphText += '**核心枢纽区域** (高中心性节点):\n'
+      ga.hubs.slice(0, 3).forEach((hub, i) => {
+        graphText += `${i + 1}. 「${hub.representativePOI}」区域 - ${hub.mainCategory}聚集地，辐射强度 ${(hub.pageRank * 100).toFixed(0)}%\n`
+      })
+      graphText += '\n'
+    }
+    
+    // 桥梁节点
+    if (ga.bridges?.length > 0 && ga.bridges[0].betweenness > 0.3) {
+      graphText += '**功能连接点** (桥梁节点):\n'
+      ga.bridges.slice(0, 2).forEach((bridge, i) => {
+        graphText += `- 「${bridge.representativePOI}」附近 - 连接度 ${(bridge.betweenness * 100).toFixed(0)}%，起到功能衔接作用\n`
+      })
+      graphText += '\n'
+    }
+    
+    // 社区结构
+    if (ga.communities?.length > 0) {
+      graphText += '**业态功能区块**:\n'
+      ga.communities.slice(0, 4).forEach((comm, i) => {
+        graphText += `- 区块 ${i + 1}: 以「${comm.dominantCategory}」为主 (${comm.categoryRatio}%)，覆盖 ${comm.gridCount} 个网格\n`
+      })
+      graphText += '\n'
+    }
+    
+    // 洞察
+    if (ga.insights?.length > 0) {
+      graphText += '**网络拓扑洞察**:\n'
+      ga.insights.forEach(insight => {
+        graphText += `- ${insight.text}\n`
+      })
+    }
+    
+    sections.push(graphText)
+  }
+  
+  // 6. 执行统计（简化）
   if (results.stats) {
     const stats = results.stats
     let statsText = '\n---\n📈 '
@@ -406,5 +460,203 @@ export default {
   generateAnswer,
   generateAnswerSync,
   buildQuickReply,
-  buildResultContext
+  buildResultContext,
+  detectHallucinations,
+  validateWriterOutput
+}
+
+// =====================================================
+// Phase 1 优化：幻觉检测
+// =====================================================
+
+/**
+ * 从 Writer 输出中提取提及的 POI 名称
+ * 
+ * @param {string} writerOutput - Writer 生成的文本
+ * @returns {string[]} 提及的 POI 名称列表
+ */
+function extractMentionedPOIs(writerOutput) {
+  if (!writerOutput) return []
+  
+  const mentioned = []
+  
+  // 模式 1: 「xxx」格式（中文书名号）
+  const pattern1 = /「([^」]+)」/g
+  let match
+  while ((match = pattern1.exec(writerOutput)) !== null) {
+    mentioned.push(match[1])
+  }
+  
+  // 模式 2: **xxx** 格式（加粗）
+  const pattern2 = /\*\*([^*]+)\*\*/g
+  while ((match = pattern2.exec(writerOutput)) !== null) {
+    // 排除一些常见的非 POI 短语
+    const text = match[1]
+    if (text.length > 2 && text.length < 30 && 
+        !text.includes('区域') && !text.includes('分析') && 
+        !text.includes('建议') && !text.includes('总结')) {
+      mentioned.push(text)
+    }
+  }
+  
+  // 模式 3: [ID:xxx] 格式（Grounded Output）
+  const pattern3 = /\[ID:([^\]]+)\]/g
+  while ((match = pattern3.exec(writerOutput)) !== null) {
+    mentioned.push(`ID:${match[1]}`)
+  }
+  
+  // 去重
+  return [...new Set(mentioned)]
+}
+
+/**
+ * 检测 Writer 输出中的幻觉
+ * 
+ * 幻觉定义：提及了 Executor 结果中不存在的 POI
+ * 
+ * @param {string} writerOutput - Writer 生成的文本
+ * @param {Object} executorResult - Executor 输出
+ * @returns {Object} { hasHallucination: boolean, hallucinations: string[], validMentions: string[] }
+ */
+export function detectHallucinations(writerOutput, executorResult) {
+  const result = {
+    hasHallucination: false,
+    hallucinations: [],
+    validMentions: [],
+    totalMentions: 0
+  }
+  
+  if (!writerOutput || !executorResult?.results) {
+    return result
+  }
+  
+  // 提取 Writer 提及的 POI
+  const mentionedPOIs = extractMentionedPOIs(writerOutput)
+  result.totalMentions = mentionedPOIs.length
+  
+  if (mentionedPOIs.length === 0) {
+    return result
+  }
+  
+  // 构建有效 POI 名称集合
+  const validNames = new Set()
+  const validIds = new Set()
+  
+  // 从 pois 中提取
+  if (executorResult.results.pois) {
+    executorResult.results.pois.forEach(poi => {
+      if (poi.name) validNames.add(poi.name.toLowerCase())
+      if (poi.id) validIds.add(String(poi.id))
+    })
+  }
+  
+  // 从 landmarks 中提取
+  if (executorResult.results.landmarks) {
+    executorResult.results.landmarks.forEach(lm => {
+      if (lm.name) validNames.add(lm.name.toLowerCase())
+    })
+  }
+  
+  // 从 graph_analysis.hubs 中提取
+  if (executorResult.results.graph_analysis?.hubs) {
+    executorResult.results.graph_analysis.hubs.forEach(hub => {
+      if (hub.representativePOI) validNames.add(hub.representativePOI.toLowerCase())
+    })
+  }
+  
+  // 从 area_profile.dominant_categories 中提取示例
+  if (executorResult.results.area_profile?.dominant_categories) {
+    executorResult.results.area_profile.dominant_categories.forEach(cat => {
+      if (cat.examples) {
+        cat.examples.forEach(ex => validNames.add(ex.toLowerCase()))
+      }
+    })
+  }
+  
+  // 检查每个提及的 POI
+  mentionedPOIs.forEach(mention => {
+    const mentionLower = mention.toLowerCase()
+    
+    // 检查是否为 ID 引用
+    if (mention.startsWith('ID:')) {
+      const id = mention.slice(3)
+      if (validIds.has(id)) {
+        result.validMentions.push(mention)
+      } else {
+        result.hallucinations.push(mention)
+      }
+      return
+    }
+    
+    // 检查是否存在（模糊匹配）
+    let found = false
+    for (const validName of validNames) {
+      // 完全匹配
+      if (validName === mentionLower) {
+        found = true
+        break
+      }
+      // 包含关系（如 "武汉大学" 包含 "武大"）
+      if (validName.includes(mentionLower) || mentionLower.includes(validName)) {
+        found = true
+        break
+      }
+    }
+    
+    if (found) {
+      result.validMentions.push(mention)
+    } else {
+      // 可能是幻觉，但也可能是通用描述词
+      // 排除一些常见的非 POI 词
+      const commonWords = ['附近', '区域', '中心', '广场', '商业', '餐饮', '交通']
+      if (!commonWords.some(w => mentionLower.includes(w))) {
+        result.hallucinations.push(mention)
+      }
+    }
+  })
+  
+  result.hasHallucination = result.hallucinations.length > 0
+  
+  if (result.hasHallucination) {
+    console.warn(`[Writer] 检测到疑似幻觉 (${result.hallucinations.length} 处):`, result.hallucinations)
+  }
+  
+  return result
+}
+
+/**
+ * 验证并清理 Writer 输出
+ * 
+ * @param {string} writerOutput - Writer 生成的文本
+ * @param {Object} executorResult - Executor 输出
+ * @param {Object} options - 选项
+ * @returns {Object} { cleanedOutput: string, warnings: string[], hallucinationReport: Object }
+ */
+export function validateWriterOutput(writerOutput, executorResult, options = {}) {
+  const { autoClean = false, addWarning = true } = options
+  
+  const hallucinationReport = detectHallucinations(writerOutput, executorResult)
+  let cleanedOutput = writerOutput
+  const warnings = []
+  
+  if (hallucinationReport.hasHallucination) {
+    if (autoClean) {
+      // 自动移除幻觉内容（简单实现：标记为待验证）
+      hallucinationReport.hallucinations.forEach(h => {
+        cleanedOutput = cleanedOutput.replace(
+          new RegExp(`「${h}」|\\*\\*${h}\\*\\*`, 'g'),
+          `~~${h}~~`
+        )
+      })
+      warnings.push(`已标记 ${hallucinationReport.hallucinations.length} 处待验证内容`)
+    } else if (addWarning) {
+      warnings.push(`⚠️ 回答中可能包含未经验证的地点名称: ${hallucinationReport.hallucinations.join(', ')}`)
+    }
+  }
+  
+  return {
+    cleanedOutput,
+    warnings,
+    hallucinationReport
+  }
 }

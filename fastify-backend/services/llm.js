@@ -11,7 +11,7 @@ import 'dotenv/config'
 // 本地 LM Studio 配置
 const LOCAL_CONFIG = {
   baseUrl: 'http://localhost:1234/v1',
-  model: process.env.LOCAL_LLM_MODEL || 'qwen3-8b-instruct',
+  model: process.env.LOCAL_LLM_MODEL || 'qwen3-4b-instruct-2507',
   timeout: 5000,  // 5秒超时检测
 }
 
@@ -57,11 +57,24 @@ async function checkLocalAvailable() {
     
     if (localAvailable) {
       const data = await response.json()
-      // 自动获取第一个可用模型的 ID (通常 LM Studio 只加载一个活跃模型)
+      // 自动获取第一个可用的 CHAT 模型的 ID (过滤掉 embedding 模型)
       if (data.data && data.data.length > 0) {
-        const fetchedModelIdx = data.data[0].id;
-        console.log(`[LLM] ✅ 本地 LM Studio 可用，自动识别模型: ${fetchedModelIdx}`)
-        LOCAL_CONFIG.model = fetchedModelIdx; 
+        // 过滤掉 embedding 模型（名称中通常包含 embed/embedding）
+        const chatModels = data.data.filter(m => {
+          const id = (m.id || '').toLowerCase()
+          return !id.includes('embed') && !id.includes('embedding')
+        })
+        
+        if (chatModels.length > 0) {
+          const fetchedModelId = chatModels[0].id
+          console.log(`[LLM] ✅ 本地 LM Studio 可用，自动识别 Chat 模型: ${fetchedModelId}`)
+          LOCAL_CONFIG.model = fetchedModelId
+        } else {
+          // 如果没找到 chat 模型，回退到第一个模型（可能报错，但至少有日志）
+          const fallbackId = data.data[0].id
+          console.log(`[LLM] ⚠️ 未找到 Chat 模型，回退到: ${fallbackId}`)
+          LOCAL_CONFIG.model = fallbackId
+        }
       } else {
         console.log('[LLM] ✅ 本地 LM Studio 可用，但未返回模型列表，使用默认配置')
       }

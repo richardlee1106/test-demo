@@ -68,7 +68,7 @@ const start = async () => {
     await initVectorDB()
     
     // 启动 HTTP 服务
-    const port = parseInt(process.env.PORT) || 3000
+    const port = parseInt(process.env.PORT) || 3100
     const host = '0.0.0.0'
     await fastify.listen({ port, host })
     

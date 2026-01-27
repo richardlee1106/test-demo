@@ -66,4 +66,4 @@ volumes:
 
 networks:
   geoloom-network:
-    driver: bridge
+    driver: bridge 

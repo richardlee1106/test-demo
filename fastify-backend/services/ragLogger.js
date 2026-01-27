@@ -67,7 +67,9 @@ class RAGSession {
     this.logs.push(entry);
     
     // 更新摘要
-    if (component === 'Vector' || component === 'pgvector') this.summary.vectorCalled = true;
+    if (component === 'Vector' || component === 'pgvector' || component === 'Milvus') {
+      this.summary.vectorCalled = true;
+    }
     if (component === 'PostGIS') this.summary.postgisCalled = true;
     
     console.log(`[RAG-${this.sessionId}] [${component}] ${action}`);

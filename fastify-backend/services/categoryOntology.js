@@ -1,0 +1,336 @@
+/**
+ * 类别本体模块 (Category Ontology)
+ * 
+ * 功能：
+ * 1. 提供标准化的 POI 类别层级结构
+ * 2. 支持同义词扩展（用户表达 → 标准类别）
+ * 3. 支持排除词（避免误匹配）
+ * 4. 提供精确的类别匹配，减少 ILIKE 模糊搜索的噪音
+ * 
+ * Phase 1 优化项之一
+ */
+
+/**
+ * 类别本体定义
+ * 
+ * 结构说明：
+ * - key: 标准类别名称（用于数据库查询）
+ * - children: 子类别列表
+ * - synonyms: 用户可能使用的同义词/口语表达
+ * - exclude: 应排除的误匹配词（如"咖啡色家具"不应匹配"咖啡"类别）
+ * - keywords: 用于意图检测的关键词
+ */
+export const CATEGORY_ONTOLOGY = {
+  // ========== 餐饮美食 ==========
+  '餐饮': {
+    children: ['中餐', '西餐', '日料', '韩餐', '火锅', '烧烤', '快餐', '小吃', '甜品', '咖啡', '奶茶', '酒吧'],
+    synonyms: ['吃的', '美食', '餐厅', '饭店', '吃饭', '好吃的', '美味', '食堂', '馆子', '下馆子'],
+    exclude: ['食品加工', '餐具', '厨具', '食品批发', '食品机械'],
+    keywords: ['吃', '饭', '餐', '美食', '好吃']
+  },
+  '中餐': {
+    children: ['川菜', '湘菜', '粤菜', '鲁菜', '东北菜', '江浙菜', '本帮菜', '清真'],
+    synonyms: ['中餐厅', '中式餐厅', '中国菜', '炒菜'],
+    exclude: [],
+    keywords: ['中餐', '炒菜']
+  },
+  '咖啡': {
+    children: ['咖啡厅', '咖啡馆', '咖啡店'],
+    synonyms: ['咖啡', 'coffee', '星巴克', '瑞幸', '喝咖啡'],
+    exclude: ['咖啡色', '咖啡机', '咖啡豆批发', '咖啡设备'],
+    keywords: ['咖啡', 'coffee']
+  },
+  '奶茶': {
+    children: ['奶茶店', '茶饮', '饮品店'],
+    synonyms: ['奶茶', '喜茶', '奈雪', '茶百道', '蜜雪冰城', '一点点', '茶颜悦色', '饮料'],
+    exclude: ['奶茶粉', '奶茶原料'],
+    keywords: ['奶茶', '茶饮', '饮品']
+  },
+  '火锅': {
+    children: ['川味火锅', '重庆火锅', '潮汕牛肉火锅', '铜锅涮肉', '自助火锅'],
+    synonyms: ['火锅', '涮锅', '涮肉', '海底捞'],
+    exclude: ['火锅底料', '火锅设备'],
+    keywords: ['火锅', '涮']
+  },
+
+  // ========== 购物商业 ==========
+  '购物': {
+    children: ['商场', '超市', '便利店', '百货', '专卖店', '市场'],
+    synonyms: ['买东西', '购物', '逛街', '商业', '商店', '店'],
+    exclude: ['购物车', '购物袋'],
+    keywords: ['买', '购物', '逛', '商场']
+  },
+  '商场': {
+    children: ['购物中心', '大型商场', 'Shopping Mall'],
+    synonyms: ['购物中心', '商业中心', '广场', '万达', 'SKP', '大悦城', '万象城'],
+    exclude: ['商场管理', '商场物业'],
+    keywords: ['商场', '购物中心']
+  },
+  '超市': {
+    children: ['大型超市', '社区超市', '生鲜超市'],
+    synonyms: ['超市', '卖场', '沃尔玛', '家乐福', '永辉', '盒马', '山姆'],
+    exclude: ['超市货架', '超市设备'],
+    keywords: ['超市']
+  },
+  '便利店': {
+    children: ['24小时便利店', '社区便利店'],
+    synonyms: ['便利店', '小卖部', '杂货店', '全家', '711', '罗森', '便利蜂'],
+    exclude: [],
+    keywords: ['便利店', '小卖部']
+  },
+
+  // ========== 交通出行 ==========
+  '交通': {
+    children: ['地铁站', '公交站', '火车站', '机场', '汽车站', '停车场', '加油站', '充电站'],
+    synonyms: ['交通', '出行', '通勤', '坐车', '去哪'],
+    exclude: ['交通银行', '交通大学', '交通职业'],
+    keywords: ['交通', '出行', '坐', '怎么去']
+  },
+  '地铁站': {
+    children: ['地铁', '轨道交通', '城铁'],
+    synonyms: ['地铁', '地铁站', '轨交', '城轨'],
+    exclude: ['地铁口商铺', '地铁广告'],
+    keywords: ['地铁']
+  },
+  '停车场': {
+    children: ['地下停车场', '地面停车场', '立体停车场'],
+    synonyms: ['停车', '停车场', '泊车', '车位'],
+    exclude: ['停车系统', '停车设备'],
+    keywords: ['停车', '泊车', '车位']
+  },
+
+  // ========== 教育培训 ==========
+  '教育': {
+    children: ['学校', '幼儿园', '小学', '中学', '高中', '大学', '培训机构', '图书馆'],
+    synonyms: ['教育', '上学', '学习', '培训', '读书'],
+    exclude: ['教育局', '教育出版'],
+    keywords: ['学', '教育', '培训', '上学']
+  },
+  '学校': {
+    children: ['小学', '中学', '高中', '职业学校'],
+    synonyms: ['学校', '学院', '附中', '附小', '实验学校'],
+    exclude: ['学校路', '学校街'],
+    keywords: ['学校', '学院']
+  },
+  '培训机构': {
+    children: ['语言培训', '艺术培训', 'IT培训', '职业培训', '早教'],
+    synonyms: ['培训', '辅导班', '补习', '课外班', '兴趣班', '新东方', '学而思'],
+    exclude: [],
+    keywords: ['培训', '辅导', '补习']
+  },
+
+  // ========== 医疗健康 ==========
+  '医疗': {
+    children: ['医院', '诊所', '药店', '卫生院', '社区卫生服务中心', '体检中心'],
+    synonyms: ['医疗', '看病', '就医', '看医生', '医'],
+    exclude: ['医疗器械', '医疗美容'],
+    keywords: ['医', '看病', '就医', '药']
+  },
+  '医院': {
+    children: ['综合医院', '专科医院', '三甲医院', '私立医院'],
+    synonyms: ['医院', '医疗中心', '人民医院', '中心医院', '附属医院'],
+    exclude: ['医院路', '医院街'],
+    keywords: ['医院']
+  },
+  '药店': {
+    children: ['连锁药店', '大药房'],
+    synonyms: ['药店', '药房', '买药', '大药房', '老百姓大药房', '益丰'],
+    exclude: ['药店管理'],
+    keywords: ['药店', '药房', '买药']
+  },
+
+  // ========== 休闲娱乐 ==========
+  '休闲娱乐': {
+    children: ['电影院', 'KTV', '游乐场', '网吧', '健身房', '足浴', '棋牌'],
+    synonyms: ['娱乐', '休闲', '玩', '好玩的', '解闷', '消遣', '放松'],
+    exclude: [],
+    keywords: ['玩', '娱乐', '休闲', '放松']
+  },
+  '电影院': {
+    children: ['影城', 'IMAX'],
+    synonyms: ['电影院', '影院', '看电影', '电影', '万达影城', 'CGV'],
+    exclude: ['电影制作', '电影公司'],
+    keywords: ['电影', '看电影']
+  },
+  '健身': {
+    children: ['健身房', '游泳馆', '瑜伽馆', '运动场'],
+    synonyms: ['健身', '锻炼', '运动', '游泳', '瑜伽', '健身房'],
+    exclude: ['健身器材'],
+    keywords: ['健身', '锻炼', '运动', '游泳']
+  },
+
+  // ========== 住宿酒店 ==========
+  '住宿': {
+    children: ['酒店', '宾馆', '民宿', '公寓', '青年旅舍'],
+    synonyms: ['住宿', '住', '酒店', '宾馆', '住哪', '过夜'],
+    exclude: ['住宿登记', '住宿管理'],
+    keywords: ['住', '酒店', '宾馆', '过夜']
+  },
+  '酒店': {
+    children: ['五星级酒店', '商务酒店', '快捷酒店', '度假酒店'],
+    synonyms: ['酒店', '宾馆', '旅馆', '如家', '汉庭', '希尔顿', '万豪', '洲际'],
+    exclude: ['酒店用品', '酒店管理'],
+    keywords: ['酒店', '宾馆']
+  },
+
+  // ========== 金融服务 ==========
+  '金融': {
+    children: ['银行', 'ATM', '证券', '保险', '信贷'],
+    synonyms: ['金融', '银行', '取钱', 'ATM', '办卡'],
+    exclude: ['金融街', '金融大厦'],
+    keywords: ['银行', '取钱', 'ATM']
+  },
+  '银行': {
+    children: ['国有银行', '商业银行', '外资银行'],
+    synonyms: ['银行', '工商银行', '建设银行', '农业银行', '中国银行', '招商银行', '取款'],
+    exclude: ['银行路', '银行街'],
+    keywords: ['银行', '取款', '存款']
+  },
+
+  // ========== 生活服务 ==========
+  '生活服务': {
+    children: ['美容美发', '洗衣店', '快递', '维修', '家政'],
+    synonyms: ['生活服务', '服务', '便民'],
+    exclude: [],
+    keywords: []
+  },
+  '美容美发': {
+    children: ['美容院', '理发店', 'SPA', '美甲'],
+    synonyms: ['美容', '美发', '理发', '剪头发', 'Tony老师', '发廊', 'SPA'],
+    exclude: ['美容仪', '美容设备'],
+    keywords: ['美容', '理发', '剪发', 'SPA']
+  }
+}
+
+/**
+ * 将用户输入规范化到标准类别
+ * 
+ * @param {string} userInput - 用户输入的类别表达
+ * @returns {Object} { standardCategory: string, matchType: 'exact'|'synonym'|'child'|'none' }
+ */
+export function normalizeCategoryInput(userInput) {
+  if (!userInput || typeof userInput !== 'string') {
+    return { standardCategory: null, matchType: 'none' }
+  }
+
+  const input = userInput.trim().toLowerCase()
+
+  // 1. 精确匹配标准类别
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    if (stdCat.toLowerCase() === input) {
+      return { standardCategory: stdCat, matchType: 'exact' }
+    }
+  }
+
+  // 2. 匹配同义词
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    if (def.synonyms?.some(syn => syn.toLowerCase() === input)) {
+      return { standardCategory: stdCat, matchType: 'synonym' }
+    }
+  }
+
+  // 3. 匹配子类别
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    if (def.children?.some(child => child.toLowerCase() === input)) {
+      return { standardCategory: input, matchType: 'child', parentCategory: stdCat }
+    }
+  }
+
+  // 4. 包含匹配（容错）
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    if (def.synonyms?.some(syn => input.includes(syn.toLowerCase()) || syn.toLowerCase().includes(input))) {
+      return { standardCategory: stdCat, matchType: 'synonym' }
+    }
+  }
+
+  return { standardCategory: null, matchType: 'none' }
+}
+
+/**
+ * 从自然语言问题中提取可能的类别
+ * 
+ * @param {string} question - 用户问题
+ * @returns {Array<{category: string, confidence: number}>} 检测到的类别列表
+ */
+export function extractCategoriesFromQuestion(question) {
+  if (!question) return []
+
+  const q = question.toLowerCase()
+  const detected = []
+
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    let confidence = 0
+
+    // 检查关键词
+    if (def.keywords?.some(kw => q.includes(kw.toLowerCase()))) {
+      confidence += 0.6
+    }
+
+    // 检查同义词
+    if (def.synonyms?.some(syn => q.includes(syn.toLowerCase()))) {
+      confidence += 0.4
+    }
+
+    // 检查排除词（降低置信度）
+    if (def.exclude?.some(ex => q.includes(ex.toLowerCase()))) {
+      confidence -= 0.5
+    }
+
+    if (confidence > 0.3) {
+      detected.push({ category: stdCat, confidence: Math.min(confidence, 1) })
+    }
+  }
+
+  // 按置信度排序
+  detected.sort((a, b) => b.confidence - a.confidence)
+
+  return detected
+}
+
+/**
+ * 获取类别的所有子类别（用于扩展搜索）
+ * 
+ * @param {string} category - 标准类别
+ * @returns {string[]} 该类别及其所有子类别
+ */
+export function expandCategory(category) {
+  const def = CATEGORY_ONTOLOGY[category]
+  if (!def) return [category]
+
+  return [category, ...(def.children || [])]
+}
+
+/**
+ * 检查查询词是否应该被排除
+ * 
+ * @param {string} category - 类别
+ * @param {string} poiName - POI 名称
+ * @returns {boolean} 是否应该排除该 POI
+ */
+export function shouldExcludePOI(category, poiName) {
+  const def = CATEGORY_ONTOLOGY[category]
+  if (!def || !def.exclude) return false
+
+  const name = poiName.toLowerCase()
+  return def.exclude.some(ex => name.includes(ex.toLowerCase()))
+}
+
+/**
+ * 获取类别的同义词列表（用于扩展搜索）
+ * 
+ * @param {string} category - 标准类别
+ * @returns {string[]} 同义词列表
+ */
+export function getCategorySynonyms(category) {
+  const def = CATEGORY_ONTOLOGY[category]
+  return def?.synonyms || []
+}
+
+export default {
+  CATEGORY_ONTOLOGY,
+  normalizeCategoryInput,
+  extractCategoriesFromQuestion,
+  expandCategory,
+  shouldExcludePOI,
+  getCategorySynonyms
+}

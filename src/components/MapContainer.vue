@@ -177,6 +177,9 @@ const heatmapEnabled = ref(props.heatmapEnabled);
 // ============ 权重控制相关状态 ============
 const weightEnabled = ref(props.weightEnabled); // 标签权重开关
 const showWeightValue = ref(props.showWeightValue); // 显示权重值开关
+const weightDialogVisible = ref(false); // 权重选择弹窗可见性
+const selectedWeightType = ref('population'); // 选择的权重类型
+const weightLoading = ref(false); // 权重加载状态
 
 // 监听 props 变化同步内部状态
 watch(() => props.filterEnabled, (val) => { filterEnabled.value = val; });
@@ -637,7 +640,7 @@ function onMapClick(evt) {
   }, { hitTolerance: 10 });
   
   // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
-  if (!foundRaw && deckInstance) {
+  if (!foundRaw && deckInstance && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
     const pickInfo = deckInstance.pickObject({
       x: pixel[0],
       y: pixel[1],
@@ -714,7 +717,7 @@ function onPointerMove(evt) {
   }, { hitTolerance: 8 });
   
   // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
-  if (!hitRaw && deckInstance) {
+  if (!hitRaw && deckInstance && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
     const pickInfo = deckInstance.pickObject({
       x: pixel[0],
       y: pixel[1],

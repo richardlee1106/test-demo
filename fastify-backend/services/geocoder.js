@@ -13,35 +13,78 @@ import { query } from './database.js';
 import * as vectordb from './vectordb.js';
 
 /**
+ * 计算两点间距离（米）- Haversine 公式
+ */
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // 地球半径（米）
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+/**
  * 综合锚点解析
  * @param {string} placeName 地名
  * @param {string} gateName 门/入口名（可选）
+ * @param {Object} viewportCenter 视野中心（可选，用于优先匹配靠近视野的结果）
  * @returns {Promise<{lon: number, lat: number, source: string, name: string}|null>}
  */
-export async function resolveAnchor(placeName, gateName = null) {
+export async function resolveAnchor(placeName, gateName = null, viewportCenter = null) {
   // 组合搜索词
   const searchTerm = gateName ? `${placeName}${gateName}` : placeName;
   const searchTermWithSpace = gateName ? `${placeName} ${gateName}` : placeName;
   
-  console.log(`[Geocoder] 解析锚点: "${searchTerm}"`);
+  console.log(`[Geocoder] 解析锚点: "${searchTerm}"${viewportCenter ? ` (偏好视野中心: ${viewportCenter.lon.toFixed(4)}, ${viewportCenter.lat.toFixed(4)})` : ''}`);
   
-  // 1. 尝试从 POI 库精确匹配
-  let result = await findInPOI(searchTerm, 'exact');
+  // 1. 尝试从 POI 库精确匹配（支持视野偏好）
+  let result = await findInPOI(searchTerm, 'exact', viewportCenter);
   if (result) {
-    console.log(`[Geocoder] POI 精确匹配成功: ${result.name}`);
+    // 检查匹配结果是否距离视野过远（可能是错误数据）
+    const distanceToViewport = viewportCenter ? 
+      calculateDistance(viewportCenter.lat, viewportCenter.lon, result.lat, result.lon) : 0;
+    
+    if (viewportCenter && distanceToViewport > 5000) {
+      console.log(`[Geocoder] ⚠️ POI 匹配距离视野过远 (${(distanceToViewport/1000).toFixed(1)}km)，尝试聚类定位...`);
+      
+      // 策略A：反向聚类定位 - 搜索所有包含该名称的 POI，计算聚类中心
+      const clusterResult = await findByClusterCentroid(searchTerm, viewportCenter);
+      if (clusterResult) {
+        const clusterDist = calculateDistance(viewportCenter.lat, viewportCenter.lon, clusterResult.lat, clusterResult.lon);
+        if (clusterDist < distanceToViewport) {
+          console.log(`[Geocoder] ✅ 使用聚类中心 (${clusterResult.count}个相关POI, 更近: ${(clusterDist/1000).toFixed(1)}km)`);
+          return { ...clusterResult, source: 'cluster_centroid' };
+        }
+      }
+      
+      // 策略B：外部 API 验证
+      const externalResult = await geocodeExternal(searchTerm);
+      if (externalResult) {
+        const externalDist = calculateDistance(viewportCenter.lat, viewportCenter.lon, externalResult.lat, externalResult.lon);
+        if (externalDist < distanceToViewport) {
+          console.log(`[Geocoder] ✅ 使用外部 API 结果 (更近: ${(externalDist/1000).toFixed(1)}km)`);
+          return { ...externalResult, source: 'external_api_verified' };
+        }
+      }
+    }
+    
+    console.log(`[Geocoder] POI 精确匹配成功: ${result.name} (${result.lon.toFixed(4)}, ${result.lat.toFixed(4)})`);
     return { ...result, source: 'poi_exact' };
   }
   
-  // 2. 尝试 POI 库模糊匹配
-  result = await findInPOI(searchTerm, 'fuzzy');
+  // 2. 尝试 POI 库模糊匹配（支持视野偏好）
+  result = await findInPOI(searchTerm, 'fuzzy', viewportCenter);
   if (result) {
-    console.log(`[Geocoder] POI 模糊匹配成功: ${result.name}`);
+    console.log(`[Geocoder] POI 模糊匹配成功: ${result.name} (${result.lon.toFixed(4)}, ${result.lat.toFixed(4)})`);
     return { ...result, source: 'poi_fuzzy' };
   }
   
   // 3. 如果有门名，尝试只搜索地名
   if (gateName) {
-    result = await findInPOI(placeName, 'fuzzy');
+    result = await findInPOI(placeName, 'fuzzy', viewportCenter);
     if (result) {
       console.log(`[Geocoder] POI 地名匹配成功: ${result.name}`);
       return { ...result, source: 'poi_place' };
@@ -162,43 +205,87 @@ async function generateEmbedding(text) {
  * 从 POI 表查找
  * @param {string} term 搜索词
  * @param {string} mode 'exact' | 'fuzzy'
+ * @param {Object} viewportCenter 视野中心（可选，用于距离排序）
  */
-async function findInPOI(term, mode = 'fuzzy') {
+async function findInPOI(term, mode = 'fuzzy', viewportCenter = null) {
   let sql;
   let params;
   
   if (mode === 'exact') {
-    sql = `
-      SELECT 
-        name,
-        ST_X(geom) AS lon,
-        ST_Y(geom) AS lat
-      FROM pois
-      WHERE name = $1
-      LIMIT 1
-    `;
-    params = [term];
+    if (viewportCenter) {
+      // 精确匹配 + 按离视野中心距离排序
+      sql = `
+        SELECT 
+          name,
+          ST_X(geom) AS lon,
+          ST_Y(geom) AS lat,
+          ST_Distance(
+            geom::geography, 
+            ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography
+          ) AS dist
+        FROM pois
+        WHERE name = $1
+        ORDER BY dist ASC
+        LIMIT 1
+      `;
+      params = [term, viewportCenter.lon, viewportCenter.lat];
+    } else {
+      sql = `
+        SELECT 
+          name,
+          ST_X(geom) AS lon,
+          ST_Y(geom) AS lat
+        FROM pois
+        WHERE name = $1
+        LIMIT 1
+      `;
+      params = [term];
+    }
   } else {
-    // 模糊匹配：使用 ILIKE 和相似度排序
-    sql = `
-      SELECT 
-        name,
-        ST_X(geom) AS lon,
-        ST_Y(geom) AS lat,
-        similarity(name, $1) AS sim
-      FROM pois
-      WHERE name ILIKE $2
-         OR address ILIKE $2
-      ORDER BY sim DESC, length(name) ASC
-      LIMIT 1
-    `;
-    params = [term, `%${term}%`];
+    // 模糊匹配
+    if (viewportCenter) {
+      // 模糊匹配 + 视野偏好：优先相似度，其次距离
+      sql = `
+        SELECT 
+          name,
+          ST_X(geom) AS lon,
+          ST_Y(geom) AS lat,
+          similarity(name, $1) AS sim,
+          ST_Distance(
+            geom::geography, 
+            ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography
+          ) AS dist
+        FROM pois
+        WHERE name ILIKE $2
+           OR address ILIKE $2
+        ORDER BY sim DESC, dist ASC, length(name) ASC
+        LIMIT 1
+      `;
+      params = [term, `%${term}%`, viewportCenter.lon, viewportCenter.lat];
+    } else {
+      sql = `
+        SELECT 
+          name,
+          ST_X(geom) AS lon,
+          ST_Y(geom) AS lat,
+          similarity(name, $1) AS sim
+        FROM pois
+        WHERE name ILIKE $2
+           OR address ILIKE $2
+        ORDER BY sim DESC, length(name) ASC
+        LIMIT 1
+      `;
+      params = [term, `%${term}%`];
+    }
   }
   
   try {
     const result = await query(sql, params);
     if (result.rows.length > 0) {
       const row = result.rows[0];
+      if (row.dist !== undefined) {
+        console.log(`[Geocoder] 匹配结果距离视野中心: ${(row.dist/1000).toFixed(2)}km`);
+      }
       return { name: row.name, lon: row.lon, lat: row.lat };
     }
   } catch (err) {
@@ -206,6 +293,66 @@ async function findInPOI(term, mode = 'fuzzy') {
   }
   
   return null;
+}
+
+/**
+ * 反向聚类定位：搜索所有包含关键词的 POI，计算聚类中心
+ * 例如：搜索 "湖北大学" → 找到 "湖北大学店"、"湖北大学站" 等 → 计算中心点
+ * @param {string} term 关键词
+ * @param {Object} viewportCenter 视野中心（用于过滤距离过远的异常点）
+ */
+async function findByClusterCentroid(term, viewportCenter) {
+  try {
+    // 搜索所有包含该关键词的 POI（限制在视野附近 20km 内）
+    let sql = `
+      SELECT 
+        ST_X(geom) AS lon,
+        ST_Y(geom) AS lat
+      FROM pois
+      WHERE name ILIKE $1
+    `;
+    let params = [`%${term}%`];
+    
+    // 如果有视野中心，只取 20km 内的 POI（过滤异常数据）
+    if (viewportCenter) {
+      sql += ` AND ST_DWithin(
+        geom::geography, 
+        ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, 
+        20000
+      )`;
+      params.push(viewportCenter.lon, viewportCenter.lat);
+    }
+    
+    sql += ` LIMIT 100`; // 最多取 100 个点
+    
+    const result = await query(sql, params);
+    
+    if (result.rows.length < 3) {
+      // 至少需要 3 个点才能形成有意义的聚类
+      return null;
+    }
+    
+    // 计算中心点（简单平均，可以升级为加权平均或 DBSCAN）
+    let sumLon = 0, sumLat = 0;
+    for (const row of result.rows) {
+      sumLon += row.lon;
+      sumLat += row.lat;
+    }
+    
+    const centroid = {
+      lon: sumLon / result.rows.length,
+      lat: sumLat / result.rows.length,
+      name: `${term} (聚类中心)`,
+      count: result.rows.length
+    };
+    
+    console.log(`[Geocoder] 聚类定位: ${result.rows.length} 个相关 POI → 中心 (${centroid.lon.toFixed(4)}, ${centroid.lat.toFixed(4)})`);
+    
+    return centroid;
+  } catch (err) {
+    console.error('[Geocoder] 聚类定位失败:', err.message);
+    return null;
+  }
 }
 
 /**
