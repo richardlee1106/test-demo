@@ -297,6 +297,228 @@ export async function spatialVectorSearch(options) {
 }
 
 /**
+ * Phase 2 优化：真正的并行融合检索 (Parallel Hybrid Search)
+ * 
+ * 与 spatialVectorSearch 的区别：
+ * - spatialVectorSearch: 串行模式，先空间过滤后语义排序
+ * - parallelHybridSearch: 并行模式，空间和语义独立检索后加权融合
+ * 
+ * 融合公式: hybrid_score = α * spatial_score + β * semantic_score
+ * 其中 α + β = 1，默认 α = 0.4, β = 0.6
+ * 
+ * 适用场景：
+ * - 用户查询包含明确语义意图（如"好吃的"、"适合约会"）
+ * - 希望语义相关但距离稍远的结果也能被检索到
+ * 
+ * @param {Object} options
+ * @returns {Promise<Array>} 融合后的检索结果
+ */
+export async function parallelHybridSearch(options) {
+  const {
+    queryEmbedding,
+    anchor,
+    radius,
+    topK = 50,
+    viewportWKT = null,
+    categories = [],
+    spatialWeight = 0.4,  // 空间分数权重
+    semanticWeight = 0.6  // 语义分数权重
+  } = options;
+
+  if (!vectorTableReady) {
+    console.warn("[VectorDB] pgvector 不可用，降级为纯空间检索");
+    return [];
+  }
+
+  const startTime = Date.now();
+  const vectorStr = `[${queryEmbedding.join(",")}]`;
+
+  // 并行执行两个独立的检索
+  const [spatialResults, semanticResults] = await Promise.all([
+    // 通道 1: 纯空间检索（基于距离）
+    executeSpatialQuery(anchor, radius, viewportWKT, categories, topK * 2),
+    // 通道 2: 纯语义检索（基于向量相似度）
+    executeSemanticQuery(vectorStr, topK * 2, viewportWKT)
+  ]);
+
+  console.log(`[VectorDB] 并行检索完成: 空间 ${spatialResults.length} 条, 语义 ${semanticResults.length} 条`);
+
+  // 构建融合结果
+  const fusionMap = new Map();
+
+  // 处理空间检索结果
+  const maxDistance = Math.max(...spatialResults.map(r => r.distance_m || 0), 1);
+  spatialResults.forEach(poi => {
+    // 空间分数：距离越近分数越高
+    const spatialScore = 1 - (poi.distance_m || 0) / maxDistance;
+    fusionMap.set(poi.id, {
+      ...poi,
+      spatial_score: spatialScore,
+      semantic_score: 0,
+      hybrid_score: spatialWeight * spatialScore
+    });
+  });
+
+  // 融入语义检索结果
+  semanticResults.forEach(poi => {
+    const semanticScore = poi.semantic_score || 0;
+    
+    if (fusionMap.has(poi.id)) {
+      // 两个通道都检索到：融合分数
+      const existing = fusionMap.get(poi.id);
+      existing.semantic_score = semanticScore;
+      existing.hybrid_score = spatialWeight * existing.spatial_score + semanticWeight * semanticScore;
+    } else {
+      // 仅语义通道检索到：计算与锚点的距离作为空间分数
+      const distance = poi.distance_m || calculateApproxDistance(anchor, poi);
+      const spatialScore = distance <= radius ? 1 - distance / maxDistance : 0;
+      
+      fusionMap.set(poi.id, {
+        ...poi,
+        spatial_score: spatialScore,
+        semantic_score: semanticScore,
+        hybrid_score: spatialWeight * spatialScore + semanticWeight * semanticScore
+      });
+    }
+  });
+
+  // 按融合分数排序
+  const fusedResults = Array.from(fusionMap.values())
+    .sort((a, b) => b.hybrid_score - a.hybrid_score)
+    .slice(0, topK);
+
+  const duration = Date.now() - startTime;
+  console.log(`[VectorDB] 并行融合完成: ${fusedResults.length} 结果, 耗时 ${duration}ms`);
+
+  return fusedResults;
+}
+
+/**
+ * 空间检索子查询
+ */
+async function executeSpatialQuery(anchor, radius, viewportWKT, categories, limit) {
+  let sql = `
+    SELECT 
+      p.id, p.name, p.address,
+      p.category_big, p.category_mid, p.category_small,
+      ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat,
+      ST_Distance(p.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) AS distance_m
+    FROM pois p
+    WHERE ST_DWithin(p.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+  `;
+  
+  const params = [anchor.lon, anchor.lat, radius];
+  let paramIndex = 4;
+
+  if (categories && categories.length > 0) {
+    const categoryConditions = categories.map((_, i) => {
+      const idx = paramIndex + i;
+      return `(p.category_big ILIKE $${idx} OR p.category_mid ILIKE $${idx} OR p.category_small ILIKE $${idx} OR p.name ILIKE $${idx})`;
+    });
+    sql += ` AND (${categoryConditions.join(' OR ')})`;
+    categories.forEach(cat => params.push(`%${cat}%`));
+    paramIndex += categories.length;
+  }
+
+  if (viewportWKT) {
+    sql += ` AND ST_Within(p.geom, ST_GeomFromText($${paramIndex}, 4326))`;
+    params.push(viewportWKT);
+    paramIndex++;
+  }
+
+  sql += ` ORDER BY distance_m ASC LIMIT $${paramIndex}`;
+  params.push(limit);
+
+  try {
+    const result = await query(sql, params);
+    return result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      category: row.category_small || row.category_mid || row.category_big,
+      lon: row.lon,
+      lat: row.lat,
+      distance_m: parseFloat(row.distance_m),
+      properties: {
+        id: row.id,
+        name: row.name,
+        '小类': row.category_small,
+        '中类': row.category_mid
+      }
+    }));
+  } catch (err) {
+    console.error('[VectorDB] 空间子查询失败:', err.message);
+    return [];
+  }
+}
+
+/**
+ * 语义检索子查询
+ */
+async function executeSemanticQuery(vectorStr, limit, viewportWKT = null) {
+  let sql = `
+    SELECT 
+      p.id, p.name, p.address,
+      p.category_big, p.category_mid, p.category_small,
+      ST_X(p.geom) AS lon, ST_Y(p.geom) AS lat,
+      (1 - (e.embedding <=> $1::vector)) AS semantic_score
+    FROM pois p
+    JOIN poi_embeddings e ON p.id = e.poi_id
+  `;
+  
+  const params = [vectorStr];
+  let paramIndex = 2;
+
+  if (viewportWKT) {
+    sql += ` WHERE ST_Within(p.geom, ST_GeomFromText($${paramIndex}, 4326))`;
+    params.push(viewportWKT);
+    paramIndex++;
+  }
+
+  sql += ` ORDER BY e.embedding <=> $1::vector ASC LIMIT $${paramIndex}`;
+  params.push(limit);
+
+  try {
+    const result = await query(sql, params);
+    return result.rows.map(row => ({
+      id: row.id,
+      name: row.name,
+      address: row.address,
+      category: row.category_small || row.category_mid || row.category_big,
+      lon: row.lon,
+      lat: row.lat,
+      semantic_score: parseFloat(row.semantic_score),
+      properties: {
+        id: row.id,
+        name: row.name,
+        '小类': row.category_small,
+        '中类': row.category_mid
+      }
+    }));
+  } catch (err) {
+    console.error('[VectorDB] 语义子查询失败:', err.message);
+    return [];
+  }
+}
+
+/**
+ * 近似距离计算（用于语义检索结果没有距离信息时）
+ */
+function calculateApproxDistance(anchor, poi) {
+  if (!anchor || !poi.lon || !poi.lat) return Infinity;
+  
+  // Haversine 公式简化版
+  const R = 6371000; // 地球半径（米）
+  const dLat = (poi.lat - anchor.lat) * Math.PI / 180;
+  const dLon = (poi.lon - anchor.lon) * Math.PI / 180;
+  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(anchor.lat * Math.PI / 180) * Math.cos(poi.lat * Math.PI / 180) *
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+
+/**
  * 混合搜索：先空间过滤，再语义排序
  * @param {Array} spatialCandidates 空间过滤后的候选 POI
  * @param {string} semanticQuery 语义查询文本
@@ -387,6 +609,7 @@ export default {
   batchInsertEmbeddings,
   semanticSearch,
   spatialVectorSearch,
+  parallelHybridSearch, // Phase 2: 并行融合检索
   hybridSearch,
   clearVectorDB,
   closeVectorDB,

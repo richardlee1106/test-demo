@@ -13,6 +13,12 @@ import vectordb from '../../services/vectordb.js'
 import { resolveAnchor } from '../../services/geocoder.js'
 import h3 from 'h3-js'
 import { generateEmbedding } from '../../services/llm.js'
+// Phase 2 优化：查询缓存
+import queryCache from '../../services/queryCache.js'
+// Phase 3 优化：POI 智能过滤
+import poiFilter from '../../services/poiFilter.js'
+// Phase 3 优化：空结果拓展搜索
+import expansionSearch from '../../services/expansionSearch.js'
 
 /**
  * 执行器配置
@@ -111,6 +117,7 @@ function getMaxBinsForResolution(resolution) {
  * 
  * @param {Object} queryPlan - Planner 输出的查询计划
  * @param {Array} frontendPOIs - 前端传来的 POI 数据（用于区域分析模式）
+ * @param {Object} options - 额外选项，包括 regions 上下文
  * @returns {Promise<Object>} ExecutorResult
  */
 export async function executeQuery(queryPlan, frontendPOIs = [], options = {}) {
@@ -118,12 +125,43 @@ export async function executeQuery(queryPlan, frontendPOIs = [], options = {}) {
   
   console.log(`[Executor] 开始执行: ${queryPlan.query_type}`)
   
+  // Phase 2 优化：查询缓存
+  // 生成查询指纹并检查缓存
+  const spatialContext = options.spatialContext || options.context || {}
+  const cacheFingerprint = queryCache.generateQueryFingerprint(queryPlan, spatialContext)
+  
+  // 检查是否应该使用缓存（某些场景不适合缓存）
+  const shouldUseCache = !options.skipCache && 
+                         !options.forceRefresh && 
+                         queryPlan.query_type !== 'clarification_needed'
+  
+  if (shouldUseCache) {
+    const cachedResult = queryCache.getFromCache(cacheFingerprint)
+    if (cachedResult) {
+      console.log(`[Executor] 🚀 缓存命中! 跳过查询执行`)
+      return {
+        success: true,
+        results: {
+          ...cachedResult,
+          stats: {
+            ...cachedResult.stats,
+            cache_hit: true,
+            original_execution_time_ms: cachedResult.stats?.execution_time_ms,
+            execution_time_ms: Date.now() - startTime
+          }
+        }
+      }
+    }
+  }
+  
   try {
     let result
     
     // 根据 QueryPlan 决定执行路径
-    // 根据 QueryPlan 决定执行路径
-    if (queryPlan.need_graph_reasoning) {
+    if (queryPlan.query_type === 'region_comparison') {
+      // 多选区对比模式
+      result = await execRegionComparison(queryPlan, options)
+    } else if (queryPlan.need_graph_reasoning) {
       result = await execGraphMode(queryPlan, frontendPOIs, options)
     } else if (queryPlan.aggregation_strategy?.enable || queryPlan.need_global_context) {
       // 启用三通道中的“统计通道”或“混合通道”
@@ -134,6 +172,93 @@ export async function executeQuery(queryPlan, frontendPOIs = [], options = {}) {
     
     // 添加执行统计
     result.stats.execution_time_ms = Date.now() - startTime
+    result.stats.cache_hit = false
+    
+    // Phase 3 优化：POI 智能过滤（条件性黑名单）
+    if (result.pois?.length > 0) {
+      const userQuestion = options.userQuestion || ''
+      const plannerCategories = queryPlan.categories || []
+      
+      const filterResult = poiFilter.filterPOIs(result.pois, {
+        userQuestion,
+        plannerCategories,
+        strict: queryPlan.query_type !== 'area_analysis' // 区域分析不过滤
+      })
+      
+      result.pois = filterResult.filtered
+      result.stats.filtered_noise_count = filterResult.removed
+      result.stats.exempted_categories = filterResult.exempted
+    }
+    
+    // Phase 3 优化：空结果拓展搜索
+    // 当结果为空且是 POI 搜索类型时，尝试拓展搜索
+    if ((!result.pois || result.pois.length === 0) && 
+        queryPlan.query_type === 'poi_search' &&
+        !options.skipExpansion) {
+      
+      console.log('[Executor] 结果为空，尝试拓展搜索...')
+      
+      // 生成拓展策略
+      const expansionPlan = expansionSearch.generateExpansionStrategies(queryPlan, spatialContext)
+      
+      if (expansionPlan.hasStrategies) {
+        let expansionSuccess = false
+        const attemptedStrategies = []
+        
+        // 依次尝试拓展策略（最多2个）
+        for (let i = 0; i < Math.min(expansionPlan.strategies.length, 2); i++) {
+          const strategy = expansionPlan.strategies[i]
+          console.log(`[Executor] 拓展策略 ${i + 1}: ${strategy.description}`)
+          attemptedStrategies.push(strategy)
+          
+          try {
+            // 用修改后的计划重新执行
+            const expandedResult = await execBasicMode(strategy.modifiedPlan, frontendPOIs, {
+              ...options,
+              skipExpansion: true // 防止递归
+            })
+            
+            if (expandedResult.pois && expandedResult.pois.length > 0) {
+              // 拓展成功
+              result = expandedResult
+              result.stats.expansion_applied = strategy.type
+              result.stats.expansion_description = strategy.description
+              result.stats.original_radius = queryPlan.radius_m
+              result.stats.original_categories = queryPlan.categories
+              expansionSuccess = true
+              
+              console.log(`[Executor] 拓展成功: ${strategy.type}, 找到 ${expandedResult.pois.length} 个结果`)
+              break
+            }
+          } catch (err) {
+            console.warn(`[Executor] 拓展策略执行失败:`, err.message)
+          }
+        }
+        
+        // 即使拓展失败，也记录尝试过的策略（供反问使用）
+        if (!expansionSuccess) {
+          result.stats.expansion_attempted = true
+          result.stats.expansion_strategies_tried = attemptedStrategies.map(s => s.type)
+          
+          // 生成反问建议
+          const suggestionMessage = expansionSearch.generateSuggestionMessage({
+            originalRadius: queryPlan.radius_m,
+            originalCategories: queryPlan.categories,
+            attemptedStrategies,
+            successfulStrategy: null,
+            finalPoiCount: 0
+          })
+          
+          result.expansion_suggestion = suggestionMessage
+          console.log('[Executor] 所有拓展策略均未找到结果，将生成反问')
+        }
+      }
+    }
+    
+    // Phase 2 优化：写入缓存（在过滤后）
+    if (shouldUseCache && result.pois?.length > 0) {
+      queryCache.setToCache(cacheFingerprint, result, queryPlan.query_type)
+    }
     
     console.log(`[Executor] 执行完成 (${result.stats.execution_time_ms}ms): ${result.pois.length} POIs`)
     
@@ -1953,7 +2078,255 @@ function circleToWKT(center, radiusM) {
   return bboxToWKT([minLon, minLat, maxLon, maxLat])
 }
 
+// =====================================================
+// 多选区对比模式
+// =====================================================
+
+/**
+ * 多选区对比执行器
+ * 
+ * @param {Object} queryPlan - 查询计划，包含 target_regions
+ * @param {Object} options - 选项，包含 regions 上下文数据
+ * @returns {Promise<Object>} 对比结果
+ */
+async function execRegionComparison(queryPlan, options = {}) {
+  const { regions = [] } = options
+  const targetRegionIds = queryPlan.target_regions || []
+  
+  console.log(`[Executor] 多选区对比模式: 目标选区 ${targetRegionIds.join(', ')}`)
+  console.log(`[Executor] 可用选区: ${regions.map(r => r.id).join(', ')}`)
+  
+  // 验证目标选区是否存在
+  const targetRegions = regions.filter(r => targetRegionIds.includes(r.id))
+  
+  if (targetRegions.length < 2) {
+    console.warn(`[Executor] 对比分析需要至少2个选区，当前只有 ${targetRegions.length} 个`)
+    return {
+      mode: 'region_comparison',
+      error: '对比分析需要至少2个有效选区',
+      comparison: null,
+      stats: { 
+        valid_regions: targetRegions.length,
+        requested_regions: targetRegionIds.length
+      }
+    }
+  }
+  
+  // 对每个选区进行分析
+  const regionAnalyses = []
+  
+  for (const region of targetRegions) {
+    const analysis = await analyzeRegion(region, queryPlan)
+    regionAnalyses.push(analysis)
+  }
+  
+  // 计算跨选区对比
+  const comparison = computeRegionComparison(regionAnalyses, queryPlan.comparison_dimensions)
+  
+  return {
+    mode: 'region_comparison',
+    target_regions: targetRegionIds,
+    region_analyses: regionAnalyses,
+    comparison,
+    pois: [], // 对比模式不返回具体 POI，只返回统计
+    area_profile: null,
+    landmarks: [],
+    stats: {
+      regions_analyzed: regionAnalyses.length,
+      total_pois: regionAnalyses.reduce((sum, r) => sum + r.poi_count, 0)
+    }
+  }
+}
+
+/**
+ * 分析单个选区
+ */
+async function analyzeRegion(region, queryPlan) {
+  const { id, name, boundaryWKT, pois = [], stats } = region
+  
+  // 如果前端已经传了 POI 数据，直接使用
+  let regionPois = pois
+  
+  // 如果没有 POI 数据但有 WKT，从数据库查询
+  if (regionPois.length === 0 && boundaryWKT) {
+    try {
+      const categories = queryPlan.categories || []
+      regionPois = await queryPoisInRegion(boundaryWKT, categories)
+    } catch (err) {
+      console.error(`[Executor] 查询选区 ${name} POI 失败:`, err.message)
+    }
+  }
+  
+  // 计算类别分布
+  const categoryDistribution = {}
+  const majorCategoryDistribution = {} // 大类分布
+  
+  regionPois.forEach(poi => {
+    const props = poi.properties || poi
+    const category = props['小类'] || props['中类'] || props.category || '未分类'
+    const majorCategory = props['大类'] || '其他'
+    
+    categoryDistribution[category] = (categoryDistribution[category] || 0) + 1
+    majorCategoryDistribution[majorCategory] = (majorCategoryDistribution[majorCategory] || 0) + 1
+  })
+  
+  // 排序获取 Top 类别
+  const topCategories = Object.entries(categoryDistribution)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([name, count]) => ({ name, count, ratio: (count / regionPois.length * 100).toFixed(1) + '%' }))
+  
+  const topMajorCategories = Object.entries(majorCategoryDistribution)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([name, count]) => ({ name, count, ratio: (count / regionPois.length * 100).toFixed(1) + '%' }))
+  
+  return {
+    id,
+    name,
+    poi_count: regionPois.length,
+    category_distribution: categoryDistribution,
+    major_category_distribution: majorCategoryDistribution,
+    top_categories: topCategories,
+    top_major_categories: topMajorCategories,
+    center: region.center
+  }
+}
+
+/**
+ * 从数据库查询选区内的 POI
+ */
+async function queryPoisInRegion(boundaryWKT, categories = []) {
+  const db = await import('../../services/db.js').then(m => m.default)
+  
+  let sql = `
+    SELECT id, name, category, "大类", "中类", "小类", 
+           ST_X(geom) as lon, ST_Y(geom) as lat
+    FROM pois
+    WHERE ST_Within(geom, ST_GeomFromText($1, 4326))
+  `
+  const params = [boundaryWKT]
+  
+  if (categories.length > 0) {
+    sql += ` AND ("小类" = ANY($2) OR "中类" = ANY($2) OR "大类" = ANY($2))`
+    params.push(categories)
+  }
+  
+  sql += ` LIMIT 10000`
+  
+  try {
+    const result = await db.query(sql, params)
+    return result.rows || []
+  } catch (err) {
+    console.error('[Executor] 查询选区 POI 失败:', err.message)
+    return []
+  }
+}
+
+/**
+ * 计算跨选区对比
+ */
+function computeRegionComparison(regionAnalyses, dimensions = []) {
+  if (regionAnalyses.length < 2) return null
+  
+  const similarities = []
+  const differences = []
+  
+  // 比较各选区的主要类别
+  const allMajorCategories = new Set()
+  regionAnalyses.forEach(r => {
+    Object.keys(r.major_category_distribution).forEach(cat => allMajorCategories.add(cat))
+  })
+  
+  // 计算每个大类在各选区的占比差异
+  allMajorCategories.forEach(category => {
+    const ratios = regionAnalyses.map(r => {
+      const count = r.major_category_distribution[category] || 0
+      return {
+        region: r.name,
+        count,
+        ratio: r.poi_count > 0 ? (count / r.poi_count * 100) : 0
+      }
+    })
+    
+    // 计算占比差异
+    const maxRatio = Math.max(...ratios.map(r => r.ratio))
+    const minRatio = Math.min(...ratios.map(r => r.ratio))
+    const ratioGap = maxRatio - minRatio
+    
+    if (ratioGap < 5) {
+      // 差异小于 5%，视为相似
+      if (maxRatio > 5) { // 只关注占比超过 5% 的类别
+        similarities.push({
+          dimension: category,
+          description: `各选区${category}占比相近 (${minRatio.toFixed(1)}% ~ ${maxRatio.toFixed(1)}%)`,
+          ratios
+        })
+      }
+    } else {
+      // 差异明显
+      const maxRegion = ratios.find(r => r.ratio === maxRatio)
+      const minRegion = ratios.find(r => r.ratio === minRatio)
+      differences.push({
+        dimension: category,
+        description: `${maxRegion.region}的${category}占比(${maxRatio.toFixed(1)}%)明显高于${minRegion.region}(${minRatio.toFixed(1)}%)`,
+        gap: ratioGap.toFixed(1) + '%',
+        ratios
+      })
+    }
+  })
+  
+  // 按差异大小排序
+  differences.sort((a, b) => parseFloat(b.gap) - parseFloat(a.gap))
+  
+  // 生成对比摘要
+  const summary = generateComparisonSummary(regionAnalyses, differences, similarities)
+  
+  return {
+    regions_compared: regionAnalyses.map(r => r.name),
+    total_pois_compared: regionAnalyses.reduce((sum, r) => sum + r.poi_count, 0),
+    similarities: similarities.slice(0, 5),
+    differences: differences.slice(0, 10),
+    summary
+  }
+}
+
+/**
+ * 生成对比摘要文本
+ */
+function generateComparisonSummary(regionAnalyses, differences, similarities) {
+  const lines = []
+  
+  // 基本信息
+  const regionNames = regionAnalyses.map(r => r.name).join('与')
+  lines.push(`${regionNames}对比分析：`)
+  
+  // POI 总量对比
+  const poiCounts = regionAnalyses.map(r => `${r.name}(${r.poi_count}个POI)`)
+  lines.push(`- POI总量: ${poiCounts.join(', ')}`)
+  
+  // 主要差异
+  if (differences.length > 0) {
+    lines.push(`- 主要差异(${differences.length}项):`)
+    differences.slice(0, 3).forEach(d => {
+      lines.push(`  · ${d.description}`)
+    })
+  }
+  
+  // 相似点
+  if (similarities.length > 0) {
+    lines.push(`- 相似特征(${similarities.length}项):`)
+    similarities.slice(0, 2).forEach(s => {
+      lines.push(`  · ${s.description}`)
+    })
+  }
+  
+  return lines.join('\n')
+}
+
 export default {
   executeQuery,
+  execRegionComparison,
   EXECUTOR_CONFIG
 }
+

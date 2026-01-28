@@ -204,6 +204,11 @@ const props = defineProps({
   selectedCategories: {
     type: Array,
     default: () => []
+  },
+  // 多选区数据 (新增)
+  regions: {
+    type: Array,
+    default: () => []
   }
 });
 
@@ -303,7 +308,17 @@ async function sendMessage() {
         mode: props.drawMode,
         center: props.circleCenter,
         viewport: props.mapBounds
-      }
+      },
+      // 多选区上下文 (新增)
+      regions: props.regions.map(r => ({
+        id: r.id,
+        name: r.name,
+        type: r.type,
+        boundaryWKT: r.boundaryWKT,
+        center: r.center,
+        poiCount: r.pois?.length || 0,
+        stats: r.stats
+      }))
     };
 
     // 发送请求给后端 AI Pipeline

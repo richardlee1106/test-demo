@@ -51,12 +51,23 @@ const WRITER_SYSTEM_PROMPT = `你是「GeoLoom-RAG 空间认知助手」，一�
 - **社区划分**：区域是否形成了明显的"功能区块"？各区块的主导业态是什么？
 - **网络拓扑洞察**：用通俗语言解释图分析结果，如"A点在区域网络中起到枢纽作用，串联了X、Y两个功能区"
 
+### 6. 多选区对比分析 (对比模式)
+- **直接指明差异**：通过数据（如POI数量、类别（大类、中类）占比）指出不同选区的核心区别
+- **业态结构对比**：比较各选区的优势业态（如"选区1商业更发达，选区2教育资源丰富"）
+- **功能定位对比**：基于数据推断不同选区的功能属性（居住/商业/混合）
+- **相似性分析**：指出共性特征
+
 ## 回答规范
 1. **先直接回答核心问题**（2-3句话概括）
 2. **分点陈述分析结论**（使用 ### 标题分节）
 3. **适度使用数据佐证**（引用百分比、数量等）
 4. **给出可行建议**（如适用）
 5. **承认数据不足**（如信息不够则明确说明）
+
+## ⭐ Grounded Generation（可追溯引用）
+当在回答中提及具体 POI 时，请使用 **[ID:xxx]** 格式引用其 ID，便于用户追溯验证。
+例如：推荐「光谷广场」[ID:12345]，距离约 500m。
+这样做可以帮助用户在地图上快速定位到你提及的地点。
 
 ## 禁止事项
 - ❌ 不要编造数据中没有的 POI
@@ -66,8 +77,8 @@ const WRITER_SYSTEM_PROMPT = `你是「GeoLoom-RAG 空间认知助手」，一�
 - ❌ 不要给出过于笼统的分析（如"POI丰富"）
 
 ## 表格格式（需要时使用）
-| 名称 | 类别 | 特点 |
-|------|------|------|`
+| 名称 | ID | 类别 | 特点 |
+|------|-----|------|------|`
 
 /**
  * 构建精简的结果上下文（供 LLM 使用）
@@ -123,6 +134,56 @@ function buildResultContext(executorResult) {
     sections.push(profileText)
   }
   
+  // 1.5. 多选区对比模式
+  if (results.mode === 'region_comparison' && results.comparison) {
+    const { comparison, region_analyses } = results
+    
+    let comparisonText = `📊 **多选区对比分析报告**\n`
+    comparisonText += `对比对象: ${comparison.regions_compared.join(' vs ')}\n`
+    comparisonText += `样本总量: ${comparison.total_pois_compared} POI\n\n`
+    
+    // 摘要部分
+    comparisonText += `**自动生成摘要**:\n`
+    comparisonText += comparison.summary + '\n\n'
+    
+    // 差异分析
+    if (comparison.differences?.length > 0) {
+      comparisonText += `**核心差异**:\n`
+      comparison.differences.forEach(d => {
+        comparisonText += `- **${d.dimension}**: ${d.description} (差距 ${d.gap})\n`
+      })
+      comparisonText += '\n'
+    }
+    
+    // 相似性分析
+    if (comparison.similarities?.length > 0) {
+      comparisonText += `**共性特征**:\n`
+      comparison.similarities.forEach(s => {
+        comparisonText += `- **${s.dimension}**: ${s.description}\n`
+      })
+      comparisonText += '\n'
+    }
+    
+    // 各选区详情
+    comparisonText += `**各选区详细画像**:\n`
+    region_analyses.forEach(r => {
+      comparisonText += `\n### ${r.name} (${r.poi_count} POI)\n`
+      
+      // Top 业态
+      if (r.top_categories?.length > 0) {
+        comparisonText += `- **主要业态**: ${r.top_categories.slice(0, 5).map(c => `${c.name}(${c.ratio})`).join(', ')}\n`
+      }
+      
+      // Top 大类
+      if (r.top_major_categories?.length > 0) {
+        comparisonText += `- **宏观结构**: ${r.top_major_categories.map(c => `${c.name}(${c.ratio})`).join(', ')}\n`
+      }
+    })
+    
+    sections.push(comparisonText)
+    return sections.join('\n\n')
+  }
+
   // 3. 空间分布 (H3 聚合)
   if (results.spatial_analysis?.grids?.length > 0) {
     const { grids, resolution } = results.spatial_analysis
@@ -139,7 +200,7 @@ function buildResultContext(executorResult) {
     
     sections.push(spatialText)
   }
-
+  
   // 4. 代表性地标 (不显示距离)
   if (results.landmarks?.length > 0) {
     let landmarkText = '🏛️ **区域内代表性 POI** (共 ' + results.landmarks.length + ' 个):\n'
@@ -158,16 +219,62 @@ function buildResultContext(executorResult) {
     
     let poiText = `📍 **检索结果** (${results.pois.length} 条${results.pois.length > 15 ? '，显示前 15 条' : ''}):\n\n`
     
+    // Phase 2 优化：Grounded Generation - 为每个 POI 添加可追溯 ID
     displayPOIs.forEach((poi, i) => {
       const dist = poi.distance_m > 0 ? `${poi.distance_m}m` : ''
       const info = [poi.category, dist].filter(Boolean).join(' | ')
-      poiText += `${i + 1}. **${poi.name}** [${info}]\n`
+      // 添加 ID 标记，供 LLM 引用
+      const poiId = poi.id || poi.poiid || `poi_${i + 1}`
+      poiText += `${i + 1}. **${poi.name}** [ID:${poiId}] [${info}]\n`
     })
     
     sections.push(poiText)
   } else if (!skipPoiList && (!results.pois || results.pois.length === 0)) {
-    // 只有在非纯分析模式下才提示未找到 POI
-    sections.push('⚠️ 未检索到符合条件的 POI 数据。')
+    // Phase 3 优化：处理拓展搜索结果
+    if (results.expansion_suggestion?.hasMessage) {
+      // 有拓展建议，生成更智能的反问
+      const messages = results.expansion_suggestion.messages || []
+      let expansionText = ''
+      
+      messages.forEach(msg => {
+        if (msg.type === 'not_found') {
+          expansionText += `${msg.text}\n\n`
+          if (msg.suggestions?.length > 0) {
+            expansionText += '**您可以尝试：**\n'
+            msg.suggestions.forEach((sug, i) => {
+              expansionText += `${i + 1}. ${sug.text}\n`
+            })
+          }
+        } else if (msg.type === 'info') {
+          expansionText += `${msg.text}\n`
+        }
+      })
+      
+      sections.push(expansionText || '⚠️ 未检索到符合条件的 POI 数据。')
+    } else if (results.stats?.expansion_applied) {
+      // 拓展成功但这里不应该进入（有POI时不会到这个分支）
+      sections.push('⚠️ 未检索到符合条件的 POI 数据。')
+    } else {
+      // 普通的空结果
+      sections.push('⚠️ 未检索到符合条件的 POI 数据。')
+    }
+  }
+  
+  // Phase 3 优化：如果拓展搜索成功应用，添加说明
+  if (results.stats?.expansion_applied && results.pois?.length > 0) {
+    let expansionNote = '\n> 💡 *'
+    
+    if (results.stats.expansion_applied === 'expand_radius') {
+      expansionNote += `在原始 ${results.stats.original_radius}m 范围内未找到结果，已自动扩展搜索范围*`
+    } else if (results.stats.expansion_applied === 'generalize_category') {
+      expansionNote += `未找到"${results.stats.original_categories?.join('、')}"，已扩展搜索至相关类别*`
+    } else if (results.stats.expansion_applied === 'expand_both') {
+      expansionNote += `已扩大搜索范围并放宽类别限制*`
+    } else {
+      expansionNote += `${results.stats.expansion_description || '已应用智能拓展搜索'}*`
+    }
+    
+    sections.push(expansionNote)
   }
   // 纯区域分析模式下不显示 POI 列表，只展示区域画像
   

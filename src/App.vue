@@ -201,6 +201,7 @@
                   :map-bounds="mapBounds"
                   :global-analysis-enabled="globalAnalysisEnabled"
                   :selected-categories="selectedCategoryPath"
+                  :regions="regions"
                   @close="toggleAiPanel"
                   @render-to-tagcloud="handleRenderAIResult"
                   @render-pois-to-map="handleRenderPoisToMap" />
@@ -229,6 +230,10 @@ import TagCloud from './components/TagCloud.vue';
 import MapContainer from './components/MapContainer.vue';
 import AiChat from './components/AiChat.vue';
 import { semanticSearch } from './utils/aiService';
+import { useRegions } from './composables/useRegions';
+
+// 多选区管理
+const { regions, getRegionsContext } = useRegions();
 
 // 组件引用
 // 组件引用

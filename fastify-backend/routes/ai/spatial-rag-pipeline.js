@@ -26,6 +26,8 @@
 import { parseIntent, quickIntentClassify, QUERY_PLAN_DEFAULTS } from './planner.js'
 import { executeQuery } from './executor.js'
 import { generateAnswer, buildQuickReply } from './writer.js'
+// Phase 2 优化：多轮对话上下文
+import conversationContext from '../../services/conversationContext.js'
 
 /**
  * 管道配置
@@ -90,19 +92,39 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   const stats = new PipelineStats()
   const session = options.session // 从 options 中获取 RAG Session
   
+  // Phase 2 优化：多轮对话上下文管理
+  const conversationSessionId = options.conversationId || options.sessionId
+  const convContext = conversationContext.getOrCreateContext(conversationSessionId)
+  
+  // 代词消解：处理"那附近"、"它们"等指代词
+  const pronounResolution = convContext.resolvePronouns(userQuestion)
+  let resolvedQuestion = pronounResolution.resolvedQuestion
+  
+  if (pronounResolution.needsContext) {
+    console.log('[Pipeline] 代词消解:', JSON.stringify(pronounResolution.substitutions))
+  }
+  
   // 构建上下文
   const context = {
     hasSelectedArea: frontendPOIs.length > 0,
     poiCount: frontendPOIs.length,
     selectedCategories: extractCategories(frontendPOIs),
+    regions: options.regions || [], // 多选区数据
+    // Phase 2: 添加对话历史摘要
+    conversationHistory: convContext.getHistorySummary(),
+    lastMentionedLocation: convContext.lastMentionedLocation,
     ...options.context
   }
   
   if (PIPELINE_CONFIG.verboseLogging) {
     console.log('\n' + '='.repeat(60))
     console.log('[Pipeline] 开始处理')
-    console.log(`[Pipeline] 问题: "${userQuestion.slice(0, 80)}${userQuestion.length > 80 ? '...' : ''}"`)
+    console.log(`[Pipeline] 原始问题: "${userQuestion.slice(0, 60)}${userQuestion.length > 60 ? '...' : ''}"`)  
+    if (resolvedQuestion !== userQuestion) {
+      console.log(`[Pipeline] 消解后: "${resolvedQuestion.slice(0, 60)}${resolvedQuestion.length > 60 ? '...' : ''}"`)  
+    }
     console.log(`[Pipeline] POI 数量: ${frontendPOIs.length}`)
+    console.log(`[Pipeline] 对话历史轮数: ${convContext.history.length}`)
     console.log('='.repeat(60))
   }
   
@@ -119,11 +141,11 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   if (useQuickMode) {
     // 快速模式：跳过 LLM，使用规则匹配
     console.log('[Pipeline] 阶段1 (快速模式): 规则意图分类')
-    queryPlan = quickIntentClassify(userQuestion)
+    queryPlan = quickIntentClassify(resolvedQuestion) // Phase 2: 使用消解后的问题
   } else {
     // 正常模式：调用 LLM
     console.log('[Pipeline] 阶段1: LLM 意图解析...')
-    const plannerResult = await parseIntent(userQuestion, context)
+    const plannerResult = await parseIntent(resolvedQuestion, context) // Phase 2: 使用消解后的问题
     queryPlan = plannerResult.queryPlan
     
     stats.endStage('planner', {
@@ -159,7 +181,10 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   stats.startStage('executor')
   console.log('[Pipeline] 阶段2: 数据库执行...')
   
-  const executorResult = await executeQuery(queryPlan, frontendPOIs, options)
+  const executorResult = await executeQuery(queryPlan, frontendPOIs, {
+    ...options,
+    userQuestion: userQuestion // Phase 3: 传入原始问题供 POI 过滤器豁免检测
+  })
   
   stats.endStage('executor', {
     success: executorResult.success,
@@ -239,7 +264,7 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   }
   
   let charCount = 0
-  for await (const chunk of generateAnswer(userQuestion, executorResult, writerOptions)) {
+  for await (const chunk of generateAnswer(resolvedQuestion, executorResult, writerOptions)) { // Phase 2: 使用消解后的问题
     charCount += chunk.length
     yield { type: 'text', content: chunk }
   }
@@ -273,6 +298,18 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
     }
     
     console.log('='.repeat(60) + '\n')
+  }
+  
+  // Phase 2 优化：记录对话轮次到上下文
+  if (conversationSessionId && executorResult.success) {
+    convContext.addTurn({
+      question: userQuestion, // 记录原始问题
+      queryPlan: queryPlan,
+      anchor: executorResult.results?.anchor,
+      pois: executorResult.results?.pois || [],
+      summary: `查询类型: ${queryPlan.query_type}, 返回 ${executorResult.results?.pois?.length || 0} 个 POI`
+    })
+    console.log(`[Pipeline] 对话记录已保存 (总轮数: ${convContext.history.length})`)
   }
 }
 

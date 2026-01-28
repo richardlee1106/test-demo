@@ -362,6 +362,89 @@ function detectIntentConflict(question) {
   }
 }
 
+// =====================================================
+// LLM Router: 超快速问题复杂度分类
+// 使用极短 prompt，预期响应时间 < 1秒
+// =====================================================
+
+const ROUTER_PROMPT = `判断这个空间查询的复杂度，返回JSON:
+- complexity: "simple"(找地点/分析单一区域) 或 "complex"(对比多选区/关系/多步推理)
+- intent: "search"(找具体POI) 或 "analysis"(区域分析) 或 "comparison"(多选区对比)
+- anchor: 提取的地名(如"武汉大学")，无则null
+- categories: 类别数组(如["咖啡厅"])
+- regions: 提取的选区编号数组(如问题中有"选区1和选区4"则返回[1,4])，无则[]
+
+只返回JSON，不要解释。`
+
+/**
+ * LLM Router: 快速分类问题复杂度
+ * 使用极短 prompt，预期 < 1秒完成
+ * 
+ * @param {string} question - 用户问题
+ * @returns {Promise<{isSimple: boolean, intent: string, anchor: string|null, categories: string[]}>}
+ */
+async function classifyQueryComplexity(question) {
+  const startTime = Date.now()
+  
+  try {
+    const { baseUrl, model, apiKey, isLocal } = await getLLMConfig()
+    
+    const headers = { 'Content-Type': 'application/json' }
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`
+    }
+    
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: ROUTER_PROMPT },
+          { role: 'user', content: question }
+        ],
+        temperature: 0,      // 零温度，确保确定性输出
+        max_tokens: 100,     // 极短输出
+      }),
+    })
+    
+    if (!response.ok) {
+      throw new Error(`Router API error: ${response.status}`)
+    }
+    
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content || ''
+    
+    // 解析 JSON
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) {
+      console.warn('[Router] 无法解析 JSON，降级到完整分析')
+      return { isSimple: false }
+    }
+    
+    const parsed = JSON.parse(jsonMatch[0])
+    const duration = Date.now() - startTime
+    
+    // 检测是否为多选区对比
+    const isComparison = parsed.intent === 'comparison' || (parsed.regions && parsed.regions.length > 1)
+    
+    console.log(`[Router] 分类完成 (${duration}ms): ${parsed.complexity}, intent=${parsed.intent}${isComparison ? ', regions=' + JSON.stringify(parsed.regions) : ''}`)
+    
+    return {
+      isSimple: parsed.complexity === 'simple' && !isComparison,
+      isComparison,
+      intent: parsed.intent,
+      anchor: parsed.anchor,
+      categories: parsed.categories || [],
+      regions: parsed.regions || [],
+      tokenUsage: data.usage
+    }
+  } catch (err) {
+    console.warn('[Router] 分类失败，降级到完整分析:', err.message)
+    return { isSimple: false }
+  }
+}
+
 /**
  * Planner System Prompt
  * 严格约束 LLM 只做意图解析，不做回答
@@ -442,6 +525,16 @@ const PLANNER_SYSTEM_PROMPT = `你是一个"空间查询规划器"，职责是�
    - 涉及"可达性"、"枢纽"、"连接"、"网络结构"、"辐射"、"生活圈"时，设置 \`need_graph_reasoning: true\`。
    - 图推理用于分析：区域核心节点、桥梁连接点、功能社区划分。
 
+### 模式 C: 多选区对比 (Region Comparison) / query_type="region_comparison"
+- **用户意图**：对比多个已绘制选区的差异、相似性、优劣势等。
+- **典型提问**："选区1和选区4的产业结构有什么差异"、"对比选区2和选区3的商业分布"。
+- **配置**：
+  - \`query_type\`: "region_comparison"
+  - \`intent_mode\`: "comparison"
+  - \`target_regions\`: [1, 4] (用户提到的选区编号)
+  - \`comparison_dimensions\`: ["产业结构", "商业分布"] (用户关注的对比维度)
+  - \`aggregation_strategy.enable\`: true (需要统计数据来对比)
+
 ## 示例
 
 用户："评估当前区域的交通便利程度"
@@ -469,6 +562,17 @@ const PLANNER_SYSTEM_PROMPT = `你是一个"空间查询规划器"，职责是�
   "semantic_query": "美食 餐厅 好吃的",
   "max_results": 20
 }
+
+用户："分析选区1和选区4的产业结构差异"
+输出：
+{
+  "query_type": "region_comparison",
+  "intent_mode": "comparison",
+  "target_regions": [1, 4],
+  "comparison_dimensions": ["产业结构", "业态分布"],
+  "aggregation_strategy": { "enable": true, "method": "h3", "resolution": 9 },
+  "semantic_query": "产业结构 业态 商业分布"
+}
 `
 
 /**
@@ -495,6 +599,20 @@ function buildContextString(context) {
   
   if (context.viewportCenter) {
     lines.push(`- 当前视图中心: ${context.viewportCenter.lat.toFixed(4)}, ${context.viewportCenter.lon.toFixed(4)}`)
+  }
+  
+  // 多选区上下文
+  if (context.regions && context.regions.length > 0) {
+    lines.push(`- 用户已绘制 ${context.regions.length} 个选区: ${context.regions.map(r => r.name).join(', ')}`)
+    context.regions.forEach(r => {
+      lines.push(`  - ${r.name}: ${r.poiCount || 0} 个 POI`)
+    })
+  }
+  
+  // 多选区对比上下文
+  if (context.isComparison && context.targetRegions?.length > 0) {
+    lines.push(`- 用户正在对比选区: ${context.targetRegions.map(id => '选区' + id).join(' vs ')}`)
+    lines.push('- 请使用 query_type: "region_comparison" 并设置 target_regions 字段')
   }
   
   return lines.length > 0 ? lines.join('\n') : '无额外上下文'
@@ -744,8 +862,70 @@ export async function parseIntent(userQuestion, context = {}) {
   
   console.log(`[Planner] 开始解析意图: "${userQuestion.slice(0, 50)}..."`)
   
+  // =========================================================
+  // 智能分流：让 LLM 自己判断问题是否简单
+  // =========================================================
+  const routerResult = await classifyQueryComplexity(userQuestion)
+  
+  if (routerResult.isSimple) {
+    // 简单问题：使用规则引擎快速处理
+    const quickPlan = quickIntentClassify(userQuestion)
+    
+    // 使用 LLM 返回的结构化信息增强 quickPlan
+    if (routerResult.anchor) {
+      quickPlan.anchor = { type: 'landmark', name: routerResult.anchor, lat: null, lon: null }
+    }
+    if (routerResult.categories?.length > 0) {
+      quickPlan.categories = routerResult.categories
+    }
+    if (routerResult.intent) {
+      quickPlan.query_type = routerResult.intent === 'search' ? 'poi_search' : 'area_analysis'
+      quickPlan.intent_mode = routerResult.intent === 'search' ? 'local_search' : 'macro_overview'
+    }
+    
+    // 补充置信度
+    quickPlan.confidence = { score: 8, level: 'high', reasons: ['LLM 分类为简单问题', '规则引擎处理'] }
+    
+    // 图推理后备检测
+    if (!quickPlan.need_graph_reasoning && detectGraphReasoningNeed(userQuestion)) {
+      quickPlan.need_graph_reasoning = true
+    }
+    
+    const duration = Date.now() - startTime
+    console.log(`[Planner] ⚡ 智能快速路径 (${duration}ms): ${quickPlan.query_type}`)
+    console.log(`[Planner] categories: ${quickPlan.categories?.join(', ') || '(全域分析)'}`)
+    
+    return {
+      success: true,
+      queryPlan: quickPlan,
+      tokenUsage: routerResult.tokenUsage || { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 },
+      duration,
+      confidence: 'high',
+      fastPath: true,
+      routerUsed: true
+    }
+  }
+  
+  // 多选区对比模式
+  if (routerResult.isComparison) {
+    console.log(`[Planner] 📊 检测到多选区对比请求，目标选区: ${routerResult.regions.join(', ')}`)
+  }
+  
+  console.log(`[Planner] 🧠 复杂问题，使用完整 LLM 解析...`)
+  
+  // =========================================================
+  // 原有路径：调用 LLM 进行解析
+  // =========================================================
+  
+  // 如果是多选区对比，增强上下文
+  let enhancedContext = { ...context }
+  if (routerResult.isComparison && routerResult.regions.length > 0) {
+    enhancedContext.targetRegions = routerResult.regions
+    enhancedContext.isComparison = true
+  }
+  
   // 构建上下文
-  const contextStr = buildContextString(context)
+  const contextStr = buildContextString(enhancedContext)
   const systemPrompt = PLANNER_SYSTEM_PROMPT.replace('{context}', contextStr)
   
   try {
@@ -861,17 +1041,48 @@ export function quickIntentClassify(question) {
     plan.radius_m = 1000 // 默认小范围
     plan.aggregation_strategy.enable = false // 不聚合，看明细
     
+    // 尝试提取锚点 (地标)
+    // 匹配模式: "XX附近"、"XX周边"、"XX旁边" 等
+    const anchorPatterns = [
+      /(.{2,15})(附近|周边|周围|旁边)/,  // "湖北大学附近"
+      /在(.{2,15})(附近|周边)/,           // "在武汉大学附近"
+      /去(.{2,15})/                       // "去光谷广场"
+    ]
+    
+    for (const pattern of anchorPatterns) {
+      const match = question.match(pattern)
+      if (match && match[1]) {
+        const anchorName = match[1].trim()
+        // 过滤掉太短或太通用的词
+        if (anchorName.length >= 2 && !['这里', '那里', '这边', '那边', '哪里'].includes(anchorName)) {
+          plan.anchor = { type: 'landmark', name: anchorName, lat: null, lon: null }
+          console.log(`[Planner Quick] 提取到锚点: "${anchorName}"`)
+          break
+        }
+      }
+    }
+    
     // 尝试提取类别
     const categories = inferCategoriesFromQuestion(q, [])
     if (categories.length > 0) {
       plan.categories = categories
+      // 生成语义查询
+      plan.semantic_query = categories.join(' ')
     } else {
       // 尝试从问题中截取（简单启发式）
-      const match = q.match(/(?:找|哪里有|有没有)(.+)/)
+      const match = q.match(/(?:找|哪里有|有没有|好吃的|好玩的)(.+)/)
       if (match) {
         plan.semantic_query = match[1].trim()
       }
     }
+    
+    // 设置置信度
+    plan.confidence = { 
+      score: plan.anchor?.name ? 8 : 6, 
+      level: plan.anchor?.name ? 'high' : 'medium', 
+      reasons: plan.anchor?.name ? ['规则匹配成功', '锚点已提取'] : ['规则匹配成功'] 
+    }
+    
     return plan
   }
   

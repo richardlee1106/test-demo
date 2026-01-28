@@ -122,13 +122,17 @@ import { Draw } from 'ol/interaction';
 import Feature from 'ol/Feature';
 import Point from 'ol/geom/Point';
 import Polygon from 'ol/geom/Polygon';
+import Overlay from 'ol/Overlay';
 import { fromLonLat, toLonLat } from 'ol/proj';
-import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape } from 'ol/style';
+import { Style, Fill, Stroke, Circle as CircleStyle, RegularShape, Text as TextStyle } from 'ol/style';
 
 // deck.gl 高性能渲染
 import { Deck } from '@deck.gl/core';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
+
+// 多选区管理
+import { useRegions, REGION_COLORS, MAX_REGIONS } from '../composables/useRegions';
 
 /**
  * 定义组件事件
@@ -140,8 +144,15 @@ import { HeatmapLayer as DeckHeatmapLayer } from '@deck.gl/aggregation-layers';
  * toggle-filter: 当切换实时过滤开关时触发
  * toggle-overlay: 当切换叠加模式时触发
  * weight-change: 当权重设置变化时触发
+ * region-added: 当添加新选区时触发
+ * region-removed: 当删除选区时触发
+ * regions-cleared: 当清空所有选区时触发
  */
-const emit = defineEmits(['polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 'map-move-end', 'toggle-filter', 'toggle-overlay', 'weight-change', 'global-analysis-change']);
+const emit = defineEmits([
+  'polygon-completed', 'map-ready', 'hover-feature', 'click-feature', 
+  'map-move-end', 'toggle-filter', 'toggle-overlay', 'weight-change', 
+  'global-analysis-change', 'region-added', 'region-removed', 'regions-cleared'
+]);
 
 /**
  * 定义组件属性
@@ -198,7 +209,20 @@ const weightOptions = ref([
   { value: 'population', label: '人口密度' },
 ]);
 
-// 缓存当前绘制的几何图形，用于数据更新时重新筛选
+// ============ 多选区管理 ============
+const { 
+  regions, 
+  activeRegionId, 
+  canAddRegion, 
+  addRegion, 
+  removeRegion, 
+  clearAllRegions, 
+  getRegion,
+  updateRegionPois,
+  getRegionsContext
+} = useRegions();
+
+// 缓存当前绘制的几何图形，用于数据更新时重新筛选 (保留单选区兼容)
 let currentGeometry = null;
 let currentGeometryType = null; // 'Polygon' | 'Circle'
 
@@ -848,11 +872,25 @@ function flyTo(feature) {
 }
 
 /**
- * 开启绘制模式
+ * 开启绘制模式 (支持多选区)
  * @param {string} mode - 'Polygon' (多边形) 或 'Circle' (圆形)
  */
 function openPolygonDraw(mode = 'Polygon') {
   if (!map.value) return;
+  
+  // 检查选区数量限制
+  if (!canAddRegion.value) {
+    import('element-plus').then(({ ElNotification }) => {
+      ElNotification({
+        title: '选区数量已达上限',
+        message: `最多只能绘制 ${MAX_REGIONS} 个选区，请先删除现有选区后再添加。`,
+        type: 'warning',
+        duration: 4000
+      });
+    });
+    return;
+  }
+  
   // 确保同一时间只有一个绘制交互
   if (drawInteraction) {
     map.value.removeInteraction(drawInteraction);
@@ -861,22 +899,23 @@ function openPolygonDraw(mode = 'Polygon') {
   drawInteraction = new Draw({ source: polygonLayerSource, type: mode });
   
   drawInteraction.on('drawstart', () => {
-    // 开始绘制新图形时，清空之前的图形和标记
-    polygonLayerSource.clear();
-    centerLayerSource.clear();
-    clearHighlights(); // 使用 deck.gl 数据清理
-    currentGeometry = null;
-    currentGeometryType = null;
+    // 多选区模式：不清空之前的图形，只清空高亮
+    // polygonLayerSource.clear();  // 注释掉，保留之前的选区
+    // centerLayerSource.clear();   // 注释掉，保留之前的标签
+    clearHighlights(); // 清空当前高亮，准备显示新选区的
+    // currentGeometry = null;
+    // currentGeometryType = null;
   });
 
   drawInteraction.on('drawend', (evt) => {
     const geometry = evt.feature.getGeometry();
     const type = geometry.getType(); // 'Polygon' 或 'Circle'
+    const feature = evt.feature;
     
     if (type === 'Polygon') {
-      onPolygonComplete(geometry);
+      onPolygonCompleteMulti(geometry, feature);
     } else if (type === 'Circle') {
-      onCircleComplete(geometry);
+      onCircleCompleteMulti(geometry, feature);
     }
     
     // 完成一个形状后自动停止绘制
@@ -957,6 +996,352 @@ function closePolygonDraw() {
       map.value.removeInteraction(interaction);
     }
   });
+}
+
+// ============ 多选区完成回调 ============
+
+/**
+ * 圆形绘制完成回调 (多选区版本)
+ */
+function onCircleCompleteMulti(circleGeom, feature) {
+  const center = circleGeom.getCenter();
+  const centerLonLat = toLonLat(center);
+  const radius = circleGeom.getRadius();
+  
+  // 收集圆内的 POI
+  const insideRaw = [];
+  for (const feat of olPoiFeatures) {
+    const coord = feat.getGeometry().getCoordinates();
+    const dx = coord[0] - center[0];
+    const dy = coord[1] - center[1];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist <= radius) {
+      insideRaw.push(feat.get('__raw'));
+    }
+  }
+  
+  // 生成 WKT (用于 PostGIS 查询)
+  // 圆形需要转换为近似多边形
+  const numPoints = 64;
+  const wktCoords = [];
+  for (let i = 0; i <= numPoints; i++) {
+    const angle = (i / numPoints) * 2 * Math.PI;
+    const x = center[0] + radius * Math.cos(angle);
+    const y = center[1] + radius * Math.sin(angle);
+    const [lon, lat] = toLonLat([x, y]);
+    wktCoords.push(`${lon} ${lat}`);
+  }
+  const boundaryWKT = `POLYGON((${wktCoords.join(', ')}))`;
+  
+  // 注册到选区管理器
+  const region = addRegion({
+    type: 'Circle',
+    geometry: {
+      type: 'Point',
+      coordinates: centerLonLat,
+      radius: radius
+    },
+    center: centerLonLat,
+    boundaryWKT,
+    pois: insideRaw,
+    olFeature: feature
+  });
+  
+  if (region) {
+    // 应用选区专属样式
+    applyRegionStyle(feature, region);
+    
+    // 添加中心标签
+    addRegionLabel(center, region);
+    
+    // 添加删除按钮
+    createRegionDeleteButton(region);
+    
+    // 更新选区 POI 统计
+    updateRegionPois(region.id, insideRaw);
+    
+    // 显示高亮
+    showHighlights(insideRaw, { full: true });
+    
+    // 发送事件
+    emit('polygon-completed', { 
+      polygon: null,
+      center: { x: map.value.getPixelFromCoordinate(center)[0], y: map.value.getPixelFromCoordinate(center)[1] },
+      selected: insideRaw,
+      type: 'Circle',
+      circleCenter: centerLonLat,
+      circleRadius: radius,
+      regionId: region.id,
+      regionName: region.name
+    });
+  }
+}
+
+/**
+ * 多边形绘制完成回调 (多选区版本)
+ */
+function onPolygonCompleteMulti(polygonGeom, feature) {
+  const ringCoords = polygonGeom.getCoordinates()[0];
+  const ringPixels = ringCoords.map((c) => map.value.getPixelFromCoordinate(c));
+  
+  // 收集多边形内的 POI
+  const insideRaw = [];
+  for (const feat of olPoiFeatures) {
+    const coord = feat.getGeometry().getCoordinates();
+    const px = map.value.getPixelFromCoordinate(coord);
+    if (pointInPolygonPixel(px, ringPixels)) {
+      insideRaw.push(feat.get('__raw'));
+    }
+  }
+  
+  // 计算地理中心点
+  const geoCenter = calculatePolygonGeoCenter(ringCoords);
+  const centerLonLat = geoCenter ? toLonLat(geoCenter) : null;
+  
+  // 生成 WKT
+  const wktCoords = ringCoords.map(c => {
+    const [lon, lat] = toLonLat(c);
+    return `${lon} ${lat}`;
+  });
+  const boundaryWKT = `POLYGON((${wktCoords.join(', ')}))`;
+  
+  // 生成 GeoJSON 几何
+  const geoJsonGeometry = {
+    type: 'Polygon',
+    coordinates: [ringCoords.map(c => toLonLat(c))]
+  };
+  
+  // 注册到选区管理器
+  const region = addRegion({
+    type: 'Polygon',
+    geometry: geoJsonGeometry,
+    center: centerLonLat,
+    boundaryWKT,
+    pois: insideRaw,
+    olFeature: feature
+  });
+  
+  if (region) {
+    // 应用选区专属样式
+    applyRegionStyle(feature, region);
+    
+    // 添加中心标签
+    if (geoCenter) {
+      addRegionLabel(geoCenter, region);
+    }
+    
+    // 添加删除按钮
+    createRegionDeleteButton(region);
+    
+    // 更新选区 POI 统计
+    updateRegionPois(region.id, insideRaw);
+    
+    // 显示高亮
+    showHighlights(insideRaw, { full: true });
+    
+    // 发送事件
+    emit('polygon-completed', { 
+      polygon: ringCoords.map((c) => toLonLat(c)),
+      center: calculatePolygonCenter(ringPixels),
+      selected: insideRaw,
+      type: 'Polygon',
+      polygonCenter: centerLonLat,
+      regionId: region.id,
+      regionName: region.name
+    });
+  }
+}
+
+/**
+ * 为选区 Feature 应用专属样式
+ */
+function applyRegionStyle(feature, region) {
+  const color = region.color;
+  feature.setStyle(new Style({
+    stroke: new Stroke({ color: color.stroke, width: 2 }),
+    fill: new Fill({ color: color.fill })
+  }));
+}
+
+/**
+ * 在选区中心添加标签
+ */
+function addRegionLabel(center, region) {
+  const labelFeature = new Feature({
+    geometry: new Point(center)
+  });
+  
+  labelFeature.setStyle(new Style({
+    text: new TextStyle({
+      text: region.name,
+      font: 'bold 14px Arial',
+      fill: new Fill({ color: region.color.text }),
+      stroke: new Stroke({ color: '#fff', width: 3 }),
+      offsetY: -20
+    }),
+    image: new RegularShape({
+      points: 5,
+      radius: 10,
+      radius2: 5,
+      fill: new Fill({ color: region.color.stroke }),
+      stroke: new Stroke({ color: '#fff', width: 2 })
+    })
+  }));
+  
+  centerLayerSource.addFeature(labelFeature);
+  
+  // 保存引用以便后续删除
+  region.labelFeature = labelFeature;
+}
+
+/**
+ * 为选区创建删除按钮 (Overlay)
+ */
+function createRegionDeleteButton(region) {
+  if (!map.value) return;
+  
+  let buttonPosition = null;
+  
+  if (region.olFeature) {
+    const geometry = region.olFeature.getGeometry();
+    const geometryType = geometry.getType();
+    
+    if (geometryType === 'Polygon') {
+      // 多边形：使用第一个顶点（通常是用户开始绘制的点）
+      // 或者找到最右上角的顶点
+      const coords = geometry.getCoordinates()[0]; // 外环坐标
+      if (coords && coords.length > 0) {
+        // 找到 Y 值最大的点中 X 值最大的（右上角顶点）
+        let topRightVertex = coords[0];
+        let maxScore = coords[0][0] + coords[0][1]; // X + Y 作为评分
+        
+        for (const coord of coords) {
+          const score = coord[0] + coord[1];
+          if (score > maxScore) {
+            maxScore = score;
+            topRightVertex = coord;
+          }
+        }
+        buttonPosition = topRightVertex;
+      }
+    } else if (geometryType === 'Circle') {
+      // 圆形：使用圆周上的右上角点（45度方向）
+      const center = geometry.getCenter();
+      const radius = geometry.getRadius();
+      // 右上角 45 度方向的点
+      const angle = Math.PI / 4; // 45度
+      buttonPosition = [
+        center[0] + radius * Math.cos(angle),
+        center[1] + radius * Math.sin(angle)
+      ];
+    } else {
+      // 兜底：使用边界框右上角
+      const extent = geometry.getExtent();
+      buttonPosition = [extent[2], extent[3]];
+    }
+  }
+  
+  if (!buttonPosition) return;
+  
+  // 创建按钮 DOM 元素
+  const buttonElement = document.createElement('div');
+  buttonElement.className = 'region-delete-btn';
+  buttonElement.innerHTML = '×';
+  buttonElement.title = `删除${region.name}`;
+  buttonElement.style.cssText = `
+    width: 24px;
+    height: 24px;
+    background: ${region.color.stroke};
+    color: white;
+    border: 2px solid white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: bold;
+    cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    transition: transform 0.2s, background 0.2s;
+    user-select: none;
+  `;
+  
+  // 悬停效果
+  buttonElement.onmouseenter = () => {
+    buttonElement.style.transform = 'scale(1.2)';
+    buttonElement.style.background = '#e74c3c';
+  };
+  buttonElement.onmouseleave = () => {
+    buttonElement.style.transform = 'scale(1)';
+    buttonElement.style.background = region.color.stroke;
+  };
+  
+  // 点击删除
+  buttonElement.onclick = (e) => {
+    e.stopPropagation();
+    removeRegionFromMap(region.id);
+  };
+  
+  // 创建 OpenLayers Overlay
+  const overlay = new Overlay({
+    element: buttonElement,
+    position: buttonPosition,
+    positioning: 'bottom-left',
+    offset: [5, -5],
+    stopEvent: true
+  });
+  
+  map.value.addOverlay(overlay);
+  
+  // 保存引用以便后续删除
+  region.deleteOverlay = overlay;
+}
+
+/**
+ * 清空所有选区 (供外部调用)
+ */
+function clearAllRegionsFromMap() {
+  // 移除所有删除按钮 Overlay
+  regions.value.forEach(region => {
+    if (region.deleteOverlay && map.value) {
+      map.value.removeOverlay(region.deleteOverlay);
+    }
+  });
+  
+  const count = clearAllRegions();
+  polygonLayerSource.clear();
+  centerLayerSource.clear();
+  clearHighlights();
+  currentGeometry = null;
+  currentGeometryType = null;
+  return count;
+}
+
+/**
+ * 删除指定选区
+ */
+function removeRegionFromMap(regionId) {
+  const region = getRegion(regionId);
+  if (region) {
+    // 从图层中移除 Feature
+    if (region.olFeature) {
+      polygonLayerSource.removeFeature(region.olFeature);
+    }
+    if (region.labelFeature) {
+      centerLayerSource.removeFeature(region.labelFeature);
+    }
+    // 移除删除按钮 Overlay
+    if (region.deleteOverlay && map.value) {
+      map.value.removeOverlay(region.deleteOverlay);
+    }
+    // 从管理器中移除
+    removeRegion(regionId);
+    
+    // 发送事件
+    emit('region-removed', { regionId, regionName: region.name });
+    
+    console.log(`[Map] 选区 ${region.name} 已删除，当前剩余 ${regions.value.length} 个选区`);
+  }
 }
 
 /**

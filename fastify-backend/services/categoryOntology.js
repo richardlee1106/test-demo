@@ -326,11 +326,123 @@ export function getCategorySynonyms(category) {
   return def?.synonyms || []
 }
 
+/**
+ * Phase 3 优化：类别泛化（向上查找父类别）
+ * 
+ * 用途：当搜索"精品手冲咖啡"找不到结果时，自动降级为"咖啡"或"餐饮"
+ * 
+ * @param {string} category - 原始类别
+ * @returns {Object} { parent: string|null, grandparent: string|null, generalized: string[] }
+ */
+export function generalizeCategory(category) {
+  if (!category) return { parent: null, grandparent: null, generalized: [] }
+  
+  const catLower = category.toLowerCase()
+  const result = {
+    original: category,
+    parent: null,
+    grandparent: null,
+    generalized: []
+  }
+  
+  // 1. 查找直接父类别
+  for (const [stdCat, def] of Object.entries(CATEGORY_ONTOLOGY)) {
+    if (def.children?.some(child => child.toLowerCase() === catLower || child.toLowerCase().includes(catLower))) {
+      result.parent = stdCat
+      result.generalized.push(stdCat)
+      
+      // 2. 继续查找祖父类别
+      for (const [grandCat, grandDef] of Object.entries(CATEGORY_ONTOLOGY)) {
+        if (grandDef.children?.some(child => child.toLowerCase() === stdCat.toLowerCase())) {
+          result.grandparent = grandCat
+          result.generalized.push(grandCat)
+          break
+        }
+      }
+      break
+    }
+    
+    // 也检查同义词匹配
+    if (def.synonyms?.some(syn => syn.toLowerCase() === catLower)) {
+      // 如果匹配的是子类别的同义词，找到父类别
+      for (const [parentCat, parentDef] of Object.entries(CATEGORY_ONTOLOGY)) {
+        if (parentDef.children?.includes(stdCat)) {
+          result.parent = parentCat
+          result.generalized.push(parentCat)
+          break
+        }
+      }
+    }
+  }
+  
+  // 3. 如果原始类别就是一级类别，尝试获取更宽泛的替代
+  if (!result.parent && CATEGORY_ONTOLOGY[category]) {
+    // 已经是一级类别，没有可泛化的父级
+    result.generalized = []
+  }
+  
+  // 4. 常见泛化规则（兜底）
+  const FALLBACK_GENERALIZATIONS = {
+    '川菜': ['中餐', '餐饮'],
+    '湘菜': ['中餐', '餐饮'],
+    '粤菜': ['中餐', '餐饮'],
+    '咖啡厅': ['咖啡', '餐饮'],
+    '咖啡馆': ['咖啡', '餐饮'],
+    '精品咖啡': ['咖啡', '餐饮'],
+    '手冲咖啡': ['咖啡', '餐饮'],
+    '奶茶店': ['奶茶', '餐饮'],
+    '茶饮': ['奶茶', '餐饮'],
+    '火锅店': ['火锅', '餐饮'],
+    '商场': ['购物'],
+    '超市': ['购物'],
+    '便利店': ['购物'],
+    '地铁站': ['交通'],
+    '公交站': ['交通'],
+    '医院': ['医疗'],
+    '药店': ['医疗'],
+    '酒店': ['住宿'],
+    '宾馆': ['住宿'],
+    '电影院': ['休闲娱乐'],
+    '健身房': ['健身', '休闲娱乐'],
+    '银行': ['金融'],
+  }
+  
+  if (result.generalized.length === 0 && FALLBACK_GENERALIZATIONS[category]) {
+    result.generalized = FALLBACK_GENERALIZATIONS[category]
+    result.parent = result.generalized[0]
+    result.grandparent = result.generalized[1] || null
+  }
+  
+  return result
+}
+
+/**
+ * 批量泛化类别列表
+ * 
+ * @param {string[]} categories - 类别列表
+ * @returns {string[]} 泛化后的类别列表（去重）
+ */
+export function generalizeCategories(categories) {
+  if (!categories || categories.length === 0) return []
+  
+  const generalized = new Set()
+  
+  categories.forEach(cat => {
+    const result = generalizeCategory(cat)
+    if (result.parent) generalized.add(result.parent)
+    if (result.grandparent) generalized.add(result.grandparent)
+  })
+  
+  return [...generalized]
+}
+
 export default {
   CATEGORY_ONTOLOGY,
   normalizeCategoryInput,
   extractCategoriesFromQuestion,
   expandCategory,
   shouldExcludePOI,
-  getCategorySynonyms
+  getCategorySynonyms,
+  generalizeCategory,
+  generalizeCategories
 }
