@@ -65,20 +65,53 @@ const WRITER_SYSTEM_PROMPT = `你是「GeoLoom-RAG 空间认知助手」，一�
 5. **承认数据不足**（如信息不够则明确说明）
 
 ## ⭐ Grounded Generation（可追溯引用）
-当在回答中提及具体 POI 时，请使用 **[ID:xxx]** 格式引用其 ID，便于用户追溯验证。
-例如：推荐「光谷广场」[ID:12345]，距离约 500m。
-这样做可以帮助用户在地图上快速定位到你提及的地点。
+当在回答中提及具体 POI 时，请直接提及名称，**不需要**附加 ID。
+例如：推荐「光谷广场」，距离约 500m。
 
-## 禁止事项
-- ❌ 不要编造数据中没有的 POI
-- ❌ 不要猜测距离或评分
-- ❌ 不要将公厕、宿舍、体育场等描述为"代表性地标"
-- ❌ 不要重复上下文中的原始 JSON
-- ❌ 不要给出过于笼统的分析（如"POI丰富"）
+## 🎯 热点区域识别与描述
+基于空间聚类分析结果，识别并描述以下类型的区域：
+- **商业热点**：餐饮、购物、娱乐设施密集区域
+- **文教区域**：学校、培训机构、文化设施聚集区
+- **居住社区**：生活服务设施配套完善的居住区
+- **产业园区**：科技公司、办公楼集中的区域
 
-## 表格格式（需要时使用）
-| 名称 | ID | 类别 | 特点 |
-|------|-----|------|------|`
+描述时应包含：
+1. 区域名称（基于主导业态命名，如"光谷商圈"、"湖北大学科教文化区"）
+2. 空间范围（大致边界描述）
+3. 核心特征（主导业态、密度水平）
+4. 代表性POI（2-3个典型地点）
+
+## 📍 语义模糊区域（Vernacular Region）
+识别非行政区划的民间认知空间：
+- 基于POI聚类结果定义区域边界
+- 使用通俗易懂的区域名称
+- 描述区域的功能定位和人地关系
+- 示例："光谷商圈"、"武昌小吃街"、"青山区老工业区"
+**JSON 脚本规范 (Strict):**
+- 必须包裹在 \`\`\`json ... \`\`\` 代码块中。
+- 位于回答的最末尾。
+- 包含 3-5 个步骤。
+- \`step\`: 序号。
+- \`focus\`: 关注点名称 (对应 POI 名称) 或 "overview" (全局)。
+- \`voice_text\`: 对应的语音解说词 (中文)。
+- \`duration\`: 镜头停留时间 (毫秒)。
+
+### 示例格式:
+## 区域概况
+这里是...
+
+## 商业氛围
+...
+
+\`\`\`json
+{
+  "narrative_flow": [
+    { "step": 1, "focus": "overview", "voice_text": "让我们鸟瞰这片区域...", "duration": 5000 },
+    { "step": 2, "focus": "万达广场", "voice_text": "如果您喜欢购物...", "duration": 6000 }
+  ]
+}
+\`\`\`
+`
 
 /**
  * 构建精简的结果上下文（供 LLM 使用）
@@ -208,6 +241,49 @@ function buildResultContext(executorResult) {
       landmarkText += `${idx + 1}. **${l.name}** [${l.type}]\n`
     })
     sections.push(landmarkText)
+  }
+  
+  // 5. 空间聚类热点区域
+  if (results.spatial_clusters?.hotspots?.length > 0) {
+    let hotspotText = '🔥 **识别的热点区域**:\n'
+    results.spatial_clusters.hotspots.forEach((h, i) => {
+      hotspotText += `\n**热点 ${i + 1}**: `;
+      if (h.dominantCategories && h.dominantCategories.length > 0) {
+        hotspotText += `${h.dominantCategories[0].category}聚集区 `;
+      }
+      hotspotText += `(密度: ${Math.round(h.density * 100) / 100}, 包含 ${h.poiCount} 个POI)\n`;
+      if (h.center) {
+        hotspotText += `- 中心位置: ${h.center.lat?.toFixed(4)}, ${h.center.lon?.toFixed(4)}\n`;
+      }
+    });
+    sections.push(hotspotText);
+  }
+  
+  // 6. 语义模糊区域（Vernacular Regions）
+  if (results.vernacular_regions?.length > 0) {
+    let regionText = '📍 **语义功能区识别**:\n';
+    results.vernacular_regions.forEach(vr => {
+      if (vr.regions && vr.regions.length > 0) {
+        regionText += `\n**${vr.category}功能区**:\n`;
+        vr.regions.forEach((r, i) => {
+          regionText += `- 子区域 ${i + 1}: 置信度 ${Math.round(r.confidence * 100)}%, 包含 ${r.poiCount} 个POI\n`;
+        });
+      }
+    });
+    sections.push(regionText);
+  }
+
+  // 7. 模糊区域 (Fuzzy Regions) - Narrative Mode 专用
+  if (results.fuzzy_regions?.length > 0) {
+    let fuzzyText = '🌌 **检测到的模糊区域 (用于 Narrative 引导)**:\n';
+    results.fuzzy_regions.forEach((fr, i) => {
+      // fr: { id, theme, pointCount, dominantCategories: [{category, count}] }
+      const domCats = fr.dominantCategories?.map(c => c.category).join('、') || '综合';
+      const centerStr = fr.center ? `(${fr.center.lat.toFixed(4)}, ${fr.center.lon.toFixed(4)})` : '';
+      fuzzyText += `- **[ID: ${fr.id}]** 主题: ${fr.theme} | 主导: ${domCats} | 规模: ${fr.pointCount} POI ${centerStr}\n`;
+    });
+    fuzzyText += '\n> 提示：请在 narrative_flow 中优先使用上述 [ID] 作为 focus 目标。\n';
+    sections.push(fuzzyText);
   }
   
   // 4. POI 列表（核心数据）- 仅当不是纯区域分析时显示
@@ -390,17 +466,17 @@ export async function* generateAnswer(userQuestion, executorResult, options = {}
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userQuestion }
-        ],
-        temperature: 0.7,
-        max_tokens: 1500,
-        stream: true,
-      }),
-    })
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userQuestion }
+          ],
+          temperature: 0.7,
+          max_tokens: 3000,
+          stream: true,
+        }),
+      })
     
     if (!response.ok) {
       throw new Error(`LLM API error: ${response.status} ${response.statusText}`)

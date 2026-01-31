@@ -30,14 +30,17 @@
     "element-plus": "^2.13.1",
     "fabric": "^6.9.1",
     "geotiff": "^2.1.4-beta.1",
+    "marked": "^17.0.1",
     "ol": "^10.7.0",
     "pg": "^8.13.1",
     "pixi.js": "^8.14.3",
     "rbush": "^4.0.1",
     "regl": "^2.1.1",
     "sass": "^1.97.2",
+    "three": "^0.182.0",
     "vite-plugin-vuetify": "^2.1.2",
     "vue": "^3.5.22",
+    "vue-router": "^4.6.4",
     "vuetify": "^3.11.6"
   },
   "devDependencies": {

@@ -1123,7 +1123,7 @@ export function quickIntentClassify(question) {
   }
   
   // 5. 检查意图冲突
-  const conflict = checkIntentConflict(question)
+  const conflict = detectIntentConflict(question)
   if (conflict.hasConflict) {
     plan.query_type = 'clarification_needed'
     plan.clarification_question = `您的问题同时包含微观搜索（如"${localKeywords.find(kw => q.includes(kw))}"）和宏观分析（如"${macroKeywords.find(kw => q.includes(kw))}"），请问您更倾向于：

@@ -162,59 +162,89 @@ async function aiRoutes(fastify, options) {
 
       let fullContent = ''
       
-      // 执行三阶段管道，传递 session 用于日志记录
-      const pipelineOptions = { ...options, session }
-      for await (const chunk of executePipeline(lastUserMessage, poiFeatures, pipelineOptions)) {
-        if (!chunk) continue
+      // 心跳定时器，防止代理超时 (Vite/Nginx)
+      const heartbeatInterval = setInterval(() => {
+        if (!reply.raw.destroyed) {
+          reply.raw.write(': heartbeat\n\n')
+        }
+      }, 15000)
+
+      try {
+        // 执行三阶段管道
+        const pipelineOptions = { ...options, session }
+        for await (const chunk of executePipeline(lastUserMessage, poiFeatures, pipelineOptions)) {
+          if (reply.raw.destroyed) break
+          if (!chunk) continue
+          
+          if (chunk.type === 'stage') {
+            reply.raw.write(`event: stage\n`)
+            reply.raw.write(`data: ${JSON.stringify({ name: chunk.name })}\n\n`)
+          } else if (chunk.type === 'text') {
+            reply.raw.write(`data: ${JSON.stringify({ content: chunk.content })}\n\n`)
+            fullContent += chunk.content
+          }
+        }
         
-        if (chunk.type === 'stage') {
-          reply.raw.write(`event: stage\n`)
-          reply.raw.write(`data: ${JSON.stringify({ name: chunk.name })}\n\n`)
-        } else if (chunk.type === 'text') {
-          reply.raw.write(`data: ${JSON.stringify({ content: chunk.content })}\n\n`)
-          fullContent += chunk.content
+        if (!reply.raw.destroyed) {
+          // 发送 POI 数据
+          const finalPOIs = session.getFinalPOIs()
+          if (finalPOIs && finalPOIs.length > 0) {
+            reply.raw.write(`event: pois\n`)
+            reply.raw.write(`data: ${JSON.stringify(finalPOIs)}\n\n`)
+          }
+          
+          // 发送边界数据
+          const boundary = session.getSpatialBoundary()
+          if (boundary) {
+            reply.raw.write(`event: boundary\n`)
+            reply.raw.write(`data: ${JSON.stringify(boundary)}\n\n`)
+          }
+          
+          // 发送空间聚类数据
+          const spatialClusters = session.getSpatialClusters()
+          if (spatialClusters && spatialClusters.length > 0) {
+            reply.raw.write(`event: spatial_clusters\n`)
+            reply.raw.write(`data: ${JSON.stringify({ hotspots: spatialClusters })}\n\n`)
+          }
+          
+          // 发送语义模糊区域数据
+          const vernacularRegions = session.getVernacularRegions()
+          if (vernacularRegions && vernacularRegions.length > 0) {
+            reply.raw.write(`event: vernacular_regions\n`)
+            reply.raw.write(`data: ${JSON.stringify(vernacularRegions)}\n\n`)
+          }
+          
+          // 发送模糊区域数据（三层边界模型）
+          const fuzzyRegions = session.getFuzzyRegions()
+          if (fuzzyRegions && fuzzyRegions.length > 0) {
+            reply.raw.write(`event: fuzzy_regions\n`)
+            reply.raw.write(`data: ${JSON.stringify(fuzzyRegions)}\n\n`)
+          }
+          
+          // 发送完成标记
+          reply.raw.write('data: [DONE]\n\n')
+          
+          session.log('Pipeline', 'Completed', { responseLength: fullContent.length })
+          session.markSuccess()
+        }
+      } catch (err) {
+        console.error('[AI Chat] 管道流式执行失败:', err)
+        if (!reply.raw.destroyed) {
+          reply.raw.write(`event: error\n`)
+          reply.raw.write(`data: ${JSON.stringify({ message: err.message })}\n\n`)
+        }
+      } finally {
+        clearInterval(heartbeatInterval)
+        session.save()
+        if (!reply.raw.destroyed) {
+          reply.raw.end()
         }
       }
-      
-      // 循环结束后，发送最终使用的 POI 数据给前端（用于地图渲染）
-      const finalPOIs = session.getFinalPOIs()
-      if (finalPOIs && finalPOIs.length > 0) {
-        reply.raw.write(`event: pois\n`)
-        reply.raw.write(`data: ${JSON.stringify(finalPOIs)}\n\n`)
-      }
-      
-      // 发送完成标记
-      reply.raw.write('data: [DONE]\n\n')
-      
-      session.log('Pipeline', 'Completed', { 
-        responseLength: fullContent.length,
-        architecture: 'three-stage'
-      })
-      session.markSuccess()
-      session.save()
-      
-      reply.raw.end()
     } catch (err) {
-      console.error('[AI Chat] 管道执行错误:', err)
-      session.log('Pipeline', 'Error', { error: err.message })
-      session.save()
-      
+      console.error('[AI Chat] 严重错误:', err)
       if (!reply.raw.headersSent) {
-        return reply.status(500).send({ error: `AI 服务错误: ${err.message}` })
+        return reply.status(500).send({ error: `AI 服务故障: ${err.message}` })
       }
-      
-      // 如果已经开始流式输出，发送错误信息
-      try {
-        const errorData = JSON.stringify({
-          choices: [{
-            delta: { content: `\n\n⚠️ 发生错误: ${err.message}` },
-            index: 0
-          }]
-        })
-        reply.raw.write(`data: ${errorData}\n\n`)
-        reply.raw.write('data: [DONE]\n\n')
-      } catch {}
-      
       reply.raw.end()
     }
   })

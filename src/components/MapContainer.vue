@@ -9,7 +9,7 @@
     </div>
     
     <!-- 实时过滤 & 热力图控制 -->
-    <div class="map-filter-control">
+    <div v-if="showControls" class="map-filter-control">
       <div class="control-row">
         <span class="filter-label">实时过滤</span>
         <el-switch 
@@ -169,6 +169,7 @@ const props = defineProps({
   weightEnabled: { type: Boolean, default: false },
   showWeightValue: { type: Boolean, default: false },
   globalAnalysisEnabled: { type: Boolean, default: true },
+  showControls: { type: Boolean, default: true },
 });
 
 // 地图容器 DOM 引用
@@ -665,13 +666,17 @@ function onMapClick(evt) {
   
   // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
   if (!foundRaw && deckInstance && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
-    const pickInfo = deckInstance.pickObject({
-      x: pixel[0],
-      y: pixel[1],
-      radius: 10,
-    });
-    if (pickInfo && pickInfo.object && pickInfo.object.raw) {
-      foundRaw = pickInfo.object.raw;
+    try {
+      const pickInfo = deckInstance.pickObject({
+        x: pixel[0],
+        y: pixel[1],
+        radius: 10,
+      });
+      if (pickInfo && pickInfo.object && pickInfo.object.raw) {
+        foundRaw = pickInfo.object.raw;
+      }
+    } catch (e) {
+      // deck.gl 可能未完全初始化，忽略 pick 错误
     }
   }
   
@@ -742,13 +747,17 @@ function onPointerMove(evt) {
   
   // 2. 如果 OpenLayers 未检测到，使用 deck.gl pickObject
   if (!hitRaw && deckInstance && pixel && Number.isFinite(pixel[0]) && Number.isFinite(pixel[1])) {
-    const pickInfo = deckInstance.pickObject({
-      x: pixel[0],
-      y: pixel[1],
-      radius: 8,
-    });
-    if (pickInfo && pickInfo.object && pickInfo.object.raw) {
-      hitRaw = pickInfo.object.raw;
+    try {
+      const pickInfo = deckInstance.pickObject({
+        x: pixel[0],
+        y: pixel[1],
+        radius: 8,
+      });
+      if (pickInfo && pickInfo.object && pickInfo.object.raw) {
+        hitRaw = pickInfo.object.raw;
+      }
+    } catch (e) {
+      // deck.gl 可能未完全初始化，忽略 pick 错误
     }
   }
   

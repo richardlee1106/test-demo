@@ -158,6 +158,54 @@ class RAGSession {
   }
 
   /**
+   * 设置空间边界 (GeoJSON)
+   */
+  setSpatialBoundary(boundary) {
+    this.spatialBoundary = boundary;
+    this.log('Fusion', 'BoundarySet', { type: boundary.type });
+  }
+
+  getSpatialBoundary() {
+    return this.spatialBoundary || null;
+  }
+  
+  /**
+   * 设置空间聚类数据
+   */
+  setSpatialClusters(clusters) {
+    this.spatialClusters = clusters;
+    this.log('Clustering', 'SpatialClustersSet', { count: clusters?.length || 0 });
+  }
+  
+  getSpatialClusters() {
+    return this.spatialClusters || [];
+  }
+  
+  /**
+   * 设置语义模糊区域数据
+   */
+  setVernacularRegions(regions) {
+    this.vernacularRegions = regions;
+    this.log('Clustering', 'VernacularRegionsSet', { count: regions?.length || 0 });
+  }
+  
+  getVernacularRegions() {
+    return this.vernacularRegions || [];
+  }
+  
+  /**
+   * 设置模糊区域数据（三层边界模型）
+   */
+  setFuzzyRegions(regions) {
+    this.fuzzyRegions = regions;
+    this.log('FuzzyRegion', 'FuzzyRegionsSet', { count: regions?.length || 0 });
+  }
+  
+  getFuzzyRegions() {
+    return this.fuzzyRegions || [];
+  }
+
+  /**
    * 添加 Token 消耗统计
    * @param {string} source - 'planner' | 'writer'
    * @param {Object} usage - { prompt_tokens, completion_tokens, total_tokens }

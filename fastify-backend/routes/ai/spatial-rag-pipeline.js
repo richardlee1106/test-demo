@@ -135,17 +135,27 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
   stats.startStage('planner')
   
   let queryPlan
-  const useQuickMode = options.quickMode || 
-    (PIPELINE_CONFIG.enableQuickMode && frontendPOIs.length < PIPELINE_CONFIG.quickModeThreshold)
   
-  if (useQuickMode) {
-    // 快速模式：跳过 LLM，使用规则匹配
-    console.log('[Pipeline] 阶段1 (快速模式): 规则意图分类')
-    queryPlan = quickIntentClassify(resolvedQuestion) // Phase 2: 使用消解后的问题
+  // 如果启用快速模式，跳过Planner LLM调用
+  if (options.quickMode) {
+    console.log('[Pipeline] 快速模式：跳过Planner LLM调用')
+    queryPlan = {
+      query_type: 'area_analysis',
+      need_global_context: true,
+      aggregation_strategy: { enable: true, resolution: 9 },
+      sampling_strategy: { enable: true, count: 30 },
+      need_landmarks: true
+    }
+    stats.endStage('planner', { success: true, query_type: 'area_analysis', quick_mode: true })
+  } else if (PIPELINE_CONFIG.enableQuickMode && frontendPOIs.length < PIPELINE_CONFIG.quickModeThreshold) {
+    // 自动快速模式：POI数量较少时使用规则匹配
+    console.log('[Pipeline] 阶段1 (自动快速模式): 规则意图分类')
+    queryPlan = quickIntentClassify(resolvedQuestion)
+    stats.endStage('planner', { success: true, query_type: queryPlan.query_type, quick_mode: true })
   } else {
     // 正常模式：调用 LLM
     console.log('[Pipeline] 阶段1: LLM 意图解析...')
-    const plannerResult = await parseIntent(resolvedQuestion, context) // Phase 2: 使用消解后的问题
+    const plannerResult = await parseIntent(resolvedQuestion, context)
     queryPlan = plannerResult.queryPlan
     
     stats.endStage('planner', {
@@ -225,6 +235,26 @@ export async function* executePipeline(userQuestion, frontendPOIs = [], options 
     // 记录最终 POI
     if (executorResult.results?.pois?.length > 0) {
       session.setFinalPOIs(executorResult.results.pois)
+    }
+    
+    // 记录自动生成的边界
+    if (executorResult.results?.boundary) {
+      session.setSpatialBoundary(executorResult.results.boundary)
+    }
+    
+    // 记录空间聚类数据
+    if (executorResult.results?.spatial_clusters?.hotspots) {
+      session.setSpatialClusters(executorResult.results.spatial_clusters.hotspots)
+    }
+    
+    // 记录语义模糊区域数据
+    if (executorResult.results?.vernacular_regions) {
+      session.setVernacularRegions(executorResult.results.vernacular_regions)
+    }
+    
+    // 记录模糊区域数据（三层边界模型）
+    if (executorResult.results?.fuzzy_regions) {
+      session.setFuzzyRegions(executorResult.results.fuzzy_regions)
     }
   }
   

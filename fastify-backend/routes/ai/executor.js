@@ -19,6 +19,12 @@ import queryCache from '../../services/queryCache.js'
 import poiFilter from '../../services/poiFilter.js'
 // Phase 3 优化：空结果拓展搜索
 import expansionSearch from '../../services/expansionSearch.js'
+// Phase 3 优化：几何计算 (凸包生成)
+import geometry from '../../services/geometry.js'
+// Phase 4 优化：空间聚类分析 (KDE + DBSCAN)
+import clustering from '../../services/clustering.js'
+// Phase 5 优化：模糊区域生成 (Fuzzy Region)
+import fuzzyRegion from '../../services/fuzzyRegion.js'
 
 /**
  * 执行器配置
@@ -680,6 +686,68 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
   
   result.stats.total_candidates = candidates.length
   
+  // =============================================
+  // 核心增强：全域画像 (Area Profile) 用于宏观分析
+  // =============================================
+  // 如果处于"全域感知"模式 (hardBoundaryWKT存在)，且候选集非常少 (可能是因为 limit 限制)，
+  // 我们需要发起一次"宽统计查询"，以获取真实的区域统计数据，防止 LLM 幻觉(e.g. "只有2家餐饮")。
+  if (hardBoundaryWKT) {
+      console.log(`[Executor] 📊 正在生成全域统计画像 (Limit: ${EXECUTOR_CONFIG.maxAnalysisCandidates})...`)
+      try {
+          // 仅拉取 category 字段进行统计，减少 IO (假设 db 支持 field selection，若不支持则拉去全量也没事，反正是在内网)
+          const statsCandidates = await db.findPOIsBySpatialFilter({
+              wkt: hardBoundaryWKT,
+              terms: null, // 不限制类别，看全貌
+              limit: EXECUTOR_CONFIG.maxAnalysisCandidates
+          })
+          
+          if (statsCandidates && statsCandidates.length > 0) {
+            const categories = {}
+            statsCandidates.forEach(p => {
+                const props = p.properties || p
+                const cat = props['大类'] || props.category || props.type || '其他'
+                categories[cat] = (categories[cat] || 0) + 1
+            })
+            
+            const sortedCats = Object.entries(categories)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, count]) => ({
+                    category: name,
+                    count: count,
+                    percentage: Math.round((count / statsCandidates.length) * 100)
+                }))
+
+            // 生成画像
+            result.area_profile = {
+                total_count: statsCandidates.length,
+                dominant_categories: sortedCats.slice(0, 10), // Top 10
+                rare_categories: sortedCats.filter(c => c.count < 3).slice(0, 5),
+                diversity_score: sortedCats.length
+            }
+            console.log(`[Executor] ✅ 全域画像: 总计 ${statsCandidates.length} 个 POI, 主导业态: ${sortedCats.slice(0,3).map(c=>`${c.category}(${c.count})`).join(', ')}`)
+          }
+      } catch (err) {
+          console.warn(`[Executor] 全域统计失败: ${err.message}`)
+      }
+  } else if (candidates.length > 0 && !result.area_profile) {
+       // 如果没有硬边界，就用 candidates 做一个简单的 profile
+       const categories = {}
+       candidates.forEach(p => {
+           const props = p.properties || p
+           const cat = props['大类'] || props.category || '其他'
+           categories[cat] = (categories[cat] || 0) + 1
+       })
+       const sortedCats = Object.entries(categories)
+           .sort((a, b) => b[1] - a[1])
+           .map(([name, count]) => ({ category: name, count: count, percentage: Math.round((count / candidates.length) * 100) }))
+           
+       result.area_profile = {
+           total_count: candidates.length,
+           dominant_categories: sortedCats.slice(0, 8)
+       }
+  }
+
+  
   // 3. 语义精排（如果有语义偏好且 pgvector 可用）
   let ranked = candidates
   const vectorAvailable = vectordb.isVectorDBAvailable()
@@ -706,6 +774,145 @@ async function execBasicMode(plan, frontendPOIs, options = {}) {
   // 5. 提取地标（如果需要）
   if (plan.need_landmarks && (anchorCoords || hardBoundaryWKT)) {
     result.landmarks = await extractLandmarks(safeFrontendPOIs, anchorCoords || viewCenter, radius)
+  }
+  
+  // =============================================
+  // 核心增强：生成动态几何边界 (Convex Hull)
+  // 用于前端 Three.js 极光描边
+  // =============================================
+  try {
+    // 优先使用全量 candidates 计算边界，使范围更准
+    const boundaryPoints = (candidates.length > 0 ? candidates : safeFrontendPOIs).map(p => ({
+        lat: p.lat || (p.geometry?.coordinates ? p.geometry.coordinates[1] : 0),
+        lon: p.lon || (p.geometry?.coordinates ? p.geometry.coordinates[0] : 0)
+    })).filter(p => p.lat !== 0 && p.lon !== 0)
+
+    if (boundaryPoints.length >= 3) {
+        const hull = geometry.calculateConvexHull(boundaryPoints)
+        const ring = geometry.hullToGeoJSONRing(hull)
+        if (ring.length > 3) {
+            result.boundary = {
+                type: "Polygon",
+                coordinates: [ring]
+            }
+            console.log(`[Executor] ✅ 动态边界生成成功: ${hull.length} 个顶点`)
+        }
+    }
+  } catch (geoErr) {
+    console.warn('[Executor] 边界生成失败:', geoErr.message)
+  }
+  
+  // =============================================
+  // Phase 4 增强：空间聚类分析 (KDE + DBSCAN)
+  // 识别商业热点和语义模糊区域
+  // 优化：大数据集时降采样以提升性能
+  // =============================================
+  try {
+    const allPOIs = candidates.length > 0 ? candidates : safeFrontendPOIs;
+    // 大数据集时降采样，限制聚类分析的点数
+    const MAX_CLUSTER_POIS = 2000;
+    let analysisPOIs = allPOIs;
+    if (allPOIs.length > MAX_CLUSTER_POIS) {
+      // 均匀采样
+      const step = Math.floor(allPOIs.length / MAX_CLUSTER_POIS);
+      analysisPOIs = allPOIs.filter((_, i) => i % step === 0).slice(0, MAX_CLUSTER_POIS);
+      console.log(`[Executor] 🔥 聚类分析降采样: ${allPOIs.length} -> ${analysisPOIs.length}`);
+    }
+    
+    if (analysisPOIs.length >= 10) {
+      console.log(`[Executor] 🔥 启动空间聚类分析，POI数量: ${analysisPOIs.length}`);
+      
+      // 执行热点识别
+      const hotspotResult = clustering.identifyHotspots(analysisPOIs, {
+        bandwidth: 200,  // 200米带宽
+        resolution: 9,   // H3分辨率9
+        clusterEps: 300, // 300米邻域半径
+        minPoints: 3     // 最少3个点形成簇
+      });
+      
+      if (hotspotResult.hotspots && hotspotResult.hotspots.length > 0) {
+        result.spatial_clusters = {
+          hotspots: hotspotResult.hotspots.map(h => ({
+            id: h.id,
+            center: h.center,
+            boundary: h.boundary,
+            density: h.density,
+            poiCount: h.poiCount,
+            confidence: h.confidence,
+            dominantCategories: h.dominantCategories
+          })),
+          stats: hotspotResult.stats,
+          densityBreaks: hotspotResult.densityBreaks
+        };
+        
+        console.log(`[Executor] ✅ 热点识别完成: ${hotspotResult.hotspots.length} 个热点区域`);
+      }
+      
+      // 简化语义区域生成：只对主要类别执行
+      const categoryGroups = {};
+      analysisPOIs.forEach(p => {
+        const props = p.properties || p;
+        const cat = props['大类'] || props.category || '其他';
+        if (!categoryGroups[cat]) categoryGroups[cat] = [];
+        categoryGroups[cat].push(p);
+      });
+      
+      // 限制处理的类别数量
+      const topCategories = Object.entries(categoryGroups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 5); // 只处理前5个主要类别
+      
+      const vernacularRegions = [];
+      for (const [cat, pois] of topCategories) {
+        if (pois.length >= 10) { // 提高阈值减少计算
+          const regionResult = clustering.generateVernacularRegion(pois, cat, {
+            eps: 250,
+            minPoints: 5, // 提高阈值
+            bandwidth: 150
+          });
+          
+          if (regionResult && regionResult.regions.length > 0) {
+            vernacularRegions.push({
+              category: cat,
+              regions: regionResult.regions.map(r => ({
+                id: r.id,
+                center: r.center,
+                boundary: r.boundary,
+                confidence: r.confidence,
+                poiCount: r.density
+              }))
+            });
+          }
+        }
+      }
+      
+      if (vernacularRegions.length > 0) {
+        result.vernacular_regions = vernacularRegions;
+        console.log(`[Executor] ✅ 语义区域生成完成: ${vernacularRegions.length} 个类别`);
+      }
+      
+      // Phase 5: 生成模糊区域（三层边界模型）
+      console.log(`[Executor] 🔥 启动模糊区域生成...`);
+      const fuzzyRegions = fuzzyRegion.identifyFuzzyRegions(analysisPOIs, {
+        eps: 200,
+        minPoints: 5
+      });
+      
+      if (fuzzyRegions && fuzzyRegions.length > 0) {
+        result.fuzzy_regions = fuzzyRegions.map(r => ({
+          id: r.id,
+          name: r.name || `${r.theme}区域`,
+          theme: r.theme,
+          center: r.center,
+          layers: r.layers,
+          pointCount: r.pointCount,
+          dominantCategories: r.dominantCategories
+        }));
+        console.log(`[Executor] ✅ 模糊区域生成完成: ${fuzzyRegions.length} 个区域`);
+      }
+    }
+  } catch (clusterErr) {
+    console.warn('[Executor] 空间聚类分析失败:', clusterErr.message);
   }
   
   return result
@@ -916,9 +1123,148 @@ async function execAggregatedAnalysisMode(plan, frontendPOIs, options = {}) {
   result.area_profile = globalProfile
   result.pois = compressPOIs(representativePOIs, result.anchor?.name) // 这里的 POIs 是代表点
   
+  // Phase 3 优化：自动生成区域边界 (凸包)
+  try {
+    if (candidates.length >= 3) {
+      const points = candidates.map(p => {
+         // 兼容 GeoJSON 和 扁平结构
+         const lon = p.lon || p.geometry?.coordinates?.[0]
+         const lat = p.lat || p.geometry?.coordinates?.[1]
+         if (typeof lon === 'number' && typeof lat === 'number') {
+           return { lon, lat }
+         }
+         return null
+      }).filter(Boolean)
+      
+      // 降采样：如果点太多，只取前 500 个分布均匀的点来算凸包，提升性能
+      const samplePoints = points.length > 500 ? points.slice(0, 500) : points;
+      
+      const hull = geometry.calculateConvexHull(samplePoints)
+      const ring = geometry.hullToGeoJSONRing(hull)
+      
+      if (ring.length > 0) {
+        result.boundary = {
+          type: 'Polygon',
+          coordinates: [ring]
+        }
+        console.log(`[Executor] 自动生成区域边界: ${ring.length} 个顶点`)
+      }
+    }
+  } catch (err) {
+    console.warn('[Executor] 边界生成失败:', err.message)
+  }
+  
+  // =============================================
+  // Phase 4 增强：聚合模式下的空间聚类分析
+  // 优化：降采样以提升性能
+  // =============================================
+  try {
+    // 聚合模式下限制分析点数
+    const MAX_AGG_CLUSTER_POIS = 2000;
+    let aggAnalysisPOIs = candidates;
+    if (candidates.length > MAX_AGG_CLUSTER_POIS) {
+      const step = Math.floor(candidates.length / MAX_AGG_CLUSTER_POIS);
+      aggAnalysisPOIs = candidates.filter((_, i) => i % step === 0).slice(0, MAX_AGG_CLUSTER_POIS);
+      console.log(`[Executor] 🔥 聚合模式降采样: ${candidates.length} -> ${aggAnalysisPOIs.length}`);
+    }
+    
+    if (aggAnalysisPOIs.length >= 10) {
+      console.log(`[Executor] 🔥 聚合模式启动空间聚类分析，POI数量: ${aggAnalysisPOIs.length}`);
+      
+      // 执行热点识别
+      const hotspotResult = clustering.identifyHotspots(aggAnalysisPOIs, {
+        bandwidth: 200,
+        resolution: 9,
+        clusterEps: 300,
+        minPoints: 3
+      });
+      
+      if (hotspotResult.hotspots && hotspotResult.hotspots.length > 0) {
+        result.spatial_clusters = {
+          hotspots: hotspotResult.hotspots.map(h => ({
+            id: h.id,
+            center: h.center,
+            boundary: h.boundary,
+            density: h.density,
+            poiCount: h.poiCount,
+            confidence: h.confidence,
+            dominantCategories: h.dominantCategories
+          })),
+          stats: hotspotResult.stats,
+          densityBreaks: hotspotResult.densityBreaks
+        };
+        
+        console.log(`[Executor] ✅ 聚合模式热点识别: ${hotspotResult.hotspots.length} 个热点`);
+      }
+      
+      // 简化语义区域生成
+      const categoryGroups = {};
+      aggAnalysisPOIs.forEach(p => {
+        const props = p.properties || p;
+        const cat = props['大类'] || props.category || '其他';
+        if (!categoryGroups[cat]) categoryGroups[cat] = [];
+        categoryGroups[cat].push(p);
+      });
+      
+      const topCategories = Object.entries(categoryGroups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 5);
+      
+      const vernacularRegions = [];
+      for (const [cat, pois] of topCategories) {
+        if (pois.length >= 10) {
+          const regionResult = clustering.generateVernacularRegion(pois, cat, {
+            eps: 250,
+            minPoints: 5,
+            bandwidth: 150
+          });
+          
+          if (regionResult && regionResult.regions.length > 0) {
+            vernacularRegions.push({
+              category: cat,
+              regions: regionResult.regions.map(r => ({
+                id: r.id,
+                center: r.center,
+                boundary: r.boundary,
+                confidence: r.confidence,
+                poiCount: r.density
+              }))
+            });
+          }
+        }
+      }
+      
+      if (vernacularRegions.length > 0) {
+        result.vernacular_regions = vernacularRegions;
+        console.log(`[Executor] ✅ 聚合模式语义区域: ${vernacularRegions.length} 个类别`);
+      }
+    }
+  } catch (clusterErr) {
+    console.warn('[Executor] 聚合模式空间聚类分析失败:', clusterErr.message);
+  }
+  
   // 提取地标
   if (plan.need_landmarks && searchCenter) {
     result.landmarks = await extractLandmarks(candidates, searchCenter, plan.radius_m || 2000)
+  }
+
+  // Phase 5 增强：Narrative Mode 专属模糊区域 (Three-Layer Model)
+  if ((plan.need_narrative || plan.need_global_context || options.quickMode) && candidates.length >= 10) {
+    try {
+      console.log(`[Executor] 🌌 生成 Narrative Mode 模糊区域 (Fuzzy Regions), 全量参与: count=${candidates.length}`);
+      
+      const fuzzyRegions = fuzzyRegion.identifyFuzzyRegions(candidates, {
+        eps: 250, // 聚类半径
+        minPoints: 5
+      });
+      
+      if (fuzzyRegions && fuzzyRegions.length > 0) {
+        result.fuzzy_regions = fuzzyRegions;
+        console.log(`[Executor] ✅ 生成了 ${fuzzyRegions.length} 个三层模糊区域 (基于全量数据)`);
+      }
+    } catch (err) {
+      console.warn('[Executor] 模糊区域生成失败:', err.message);
+    }
   }
 
   return result
@@ -1434,6 +1780,7 @@ async function execGraphMode(plan, frontendPOIs, options = {}) {
     area_profile: null,
     landmarks: [],
     graph_analysis: null, // 图分析结果
+    fuzzy_regions: [],    // 模糊区域数据 (Inherited from Aggregated)
     stats: {
       total_candidates: 0,
       filtered_count: 0,
@@ -1448,6 +1795,7 @@ async function execGraphMode(plan, frontendPOIs, options = {}) {
   result.anchor = aggregatedResult.anchor
   result.area_profile = aggregatedResult.area_profile
   result.landmarks = aggregatedResult.landmarks
+  result.fuzzy_regions = aggregatedResult.fuzzy_regions || [] // 继承模糊区域数据
   result.stats.total_candidates = aggregatedResult.stats?.total_candidates || 0
   
   // 2. 动态导入图服务（避免循环依赖）
@@ -1738,6 +2086,7 @@ function sortCandidates(candidates, sortBy) {
 
 /**
  * 压缩 POI 数据（只保留 Writer 需要的字段）
+ * Phase 4 优化：移除ID字段，减少认知负荷
  */
 function compressPOIs(pois, anchorName = '') {
   return pois.map(poi => {
@@ -1745,7 +2094,8 @@ function compressPOIs(pois, anchorName = '') {
     const props = poi.properties || poi
     
     return {
-      id: poi.id || props.id || poi.poiid,
+      // 移除ID字段：该标识符对叙事分析无语义价值
+      // id: poi.id || props.id || poi.poiid,
       name: props['名称'] || props.name || poi.name || '未命名',
       lon: props.lon || poi.lon || (poi.geometry?.coordinates ? poi.geometry.coordinates[0] : null),
       lat: props.lat || poi.lat || (poi.geometry?.coordinates ? poi.geometry.coordinates[1] : null),
